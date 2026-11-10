@@ -29,10 +29,7 @@ fn write(path: &Path, text: &str, expected: Option<&str>) -> Result<(), String> 
         return Err("Text file exceeds 1 MiB".into());
     }
     if read(path)?.as_deref() != expected {
-        return Err(
-            "The file changed outside Herdr. Reload before saving; your draft is still here."
-                .into(),
-        );
+        return Err(format!("The file changed outside {}. Reload before saving; your draft is still here.", crate::brand::NAME));
     }
     let parent = path.parent().ok_or("File needs a parent directory")?;
     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;

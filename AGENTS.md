@@ -1,22 +1,36 @@
-# Herdr app
+# Apollo
 
-The Herdr 2 desktop app (`herdr-app`): a native GPUI client of
-[herdr-core](https://github.com/herdrdev/herdr-core). Can (`ogulcancelik`)
-maintains it.
+Apollo is a fork of [herdr-app](https://github.com/herdrdev/herdr-app)
+(Apache-2.0): the Herdr desktop app, a native GPUI client of
+[herdr-core](https://github.com/herdrdev/herdr-core), renamed and with its
+own releases. It lives at
+[ForYouzi/apollo-app](https://github.com/ForYouzi/apollo-app).
 
 If AGENTS.local.md exists, read it too: the maintainer's local rules.
 
+## What Apollo keeps from Herdr
+
+The brand (name, bundle id, icon, executable) lives in `src/brand.rs`;
+`scripts/brand-plist` renders the macOS Info.plist from
+`packaging/Info.plist.in`. Internal herdr names stay on purpose: the
+`herdr-app` command, the settings home `~/.config/herdr-app`, herdr-core,
+and the `HERDR_*` environment variables, so Apollo shares a Herdr setup.
+
+Apollo never updates itself (`src/update.rs`); new versions are on the
+GitHub Releases page. Only herdr-core is checked and updated, and only in
+release builds (`APOLLO_RELEASE` set at build time). Never set
+`HERDR_APP_RELEASE`: it would turn on Herdr's telemetry and feedback
+endpoints. The release workflow fails if a script sets it.
+
 ## Compatibility
 
-Preserve compatibility with released versions and installed user data.
-Discuss breaking changes and removal of compatibility code with the maintainer
-before changing documented behavior.
+Preserve compatibility with installed user data: Apollo reads and writes
+the same `~/.config/herdr-app` as Herdr and talks to the same herdr-core.
 
-## Before you grow the app's core: ask Can
+## The app's core stays small
 
-The app's core (the model, machine layout documents, commands, and shared mod APIs)
-stays small; everything else is mods. Before adding anything to it, answer
-these three, then discuss with Can and wait for his go:
+The app's core (the model, machine layout documents, commands, and shared
+mod APIs) stays small; everything else is mods. Before adding to it, ask:
 
 1. Does the app itself act on it (it changes what the app does, not only
    how something looks)?
@@ -24,9 +38,7 @@ these three, then discuss with Can and wait for his go:
    watching)?
 3. Can mods not do it correctly, even with care?
 
-If all three are no, it belongs in mods (their shared storage, their own
-code), even at the price of some repetition. Same for herdr-core: what the
-app asks of it goes through Can too.
+If all three are no, it belongs in mods.
 
 `herdr-app --skill` prints the window manual in `src/SKILL.md`.
 Keep it current when changing agent-facing behavior.
@@ -37,71 +49,60 @@ Keep it current when changing agent-facing behavior.
 every start: it's how their agents learn what the app can do. A change to
 what users or agents can do (a command, a setting, a layout or mod
 feature, a file) updates it in the same commit. `cargo test` checks that it
-names every command and settings.json key; the rest is on you. Keep it a
-map with rules and short examples: the `.d.ts` files are generated and are
-the full API.
+names every command and settings.json key; the rest is on you. The `.d.ts`
+files are the full API.
 
 ## What ships in the box
 
 `defaults/` is built into the app: mods, `layouts/*.json`, `keys.json`
 (Linux, Windows) and `keys.macos.json` (Mac). Shipped layouts and mods are
-replaced on start; edited versions are moved to personal copies. Layout
-clicks are kept separately. `keys.json` is installed when missing; files matching
-an earlier shipped original byte-for-byte are upgraded to the current defaults.
-Edited keys files are never replaced. Keep release originals in
-`src/keys/shipped/` when changing defaults.
+replaced on start; edited versions are moved to personal copies. `keys.json`
+is installed when missing; files matching an earlier shipped original
+byte-for-byte are upgraded. Edited keys files are never replaced. Keep
+release originals in `src/keys/shipped/` when changing defaults.
 
 ## Platform differences
 
 Gate per OS only where the OS really behaves differently. A one-line
 `cfg!(windows)` next to the quirk is fine, with a comment saying why; anything
-bigger goes behind one small module per concern rather than `#[cfg]` spread
-through shared code. Give the quirk a test on its platform and keep the other
-platforms' behavior unchanged (and tested). Windows and macOS changes are
-checked on those systems, not only by cross-compiling.
+bigger goes behind one small module per concern. Give the quirk a test on its
+platform and keep the other platforms' behavior unchanged (and tested).
 
 ## Building and testing
 
-`just build`, `just test` (what CI runs, on Linux), `just check` (the tests).
-`just install` builds and installs the desktop app using the platform installer.
-On Windows it updates `%LOCALAPPDATA%\Programs\herdr-app` and the Start menu;
-quit and reopen Herdr to use the new build. Windows recipes use PowerShell by default;
-`just --shell pwsh --shell-arg -Command <recipe>` uses pwsh.
+Clone with submodules. Use Rust 1.95.0 and Zig 0.16.0 (the versions in
+`.github/workflows/ci.yml`; set `ZIG` if `zig` is not on PATH).
 
-Never run a bare `target/*/herdr-app` (no arguments) on a machine where you
-also use the app without `HERDR_APP_HOME` pointing at a scratch home: it
-opens a second window on your real setup. Subcommands and `--help` only
-talk.
+- `just build`, `just test`, `just check`.
+- In agent sessions run `cargo test --locked --bins` plus the non-screenshot
+  `--test` targets. Never run `shot_pixels` (or a bare `cargo test`, which
+  includes it) in an agent session: it opens windows.
+- `bun test scripts/docs.test.ts` and `bun scripts/docs.ts check` check the
+  docs; `just docs-generate` refreshes `docs/commands.md` from `src/commands.rs`.
+- When dependencies or bundled assets change, run `just notices`.
 
-On Linux, test UI changes in the sandbox: `scripts/sandbox up`, then `do
-<command> [json]`, `status`, `shot` (screenshot), `move|click|drag`
-(pointer input, window px), `type`, `key <keysym> [Control_L ...]`, `hc
-...`, `restart`, `down`. It has its own core, home and a headless display
-(Weston + Xwayland) under `/var/tmp/herdr-app-sandbox`, so nothing pops up
-on your screen. Never fake input on a real display. Run `scripts/sandbox
-down` when done.
+Never launch the app in an agent session: no `cargo run`, no bare
+`target/*/herdr-app`, no `open`. Subcommands and `--help`/`--version` only
+talk; run them with `HERDR_APP_HOME` pointing at a scratch folder
+(`HERDR_APP_HOME=$(mktemp -d) target/debug/herdr-app --version`). Never stop,
+signal or restart the person's app or core.
+
+`scripts/package` builds a release zip into `dist/` (macOS: ad-hoc signed
+`Apollo.app` unless `APPLE_CERTIFICATE_P12` is set; Windows: an
+`apollo-app` folder). `scripts/install-macos` writes `~/Applications/Apollo.app`;
+don't run it in agent sessions.
 
 ## Contributing
 
-Work on a branch and open a pull request to `master`. CI must pass and Can
-approves; merges are squashed. Commit messages: lowercase conventional
-commits, single line, no AI co-author lines. Only Can releases (a `v*` tag).
+Work on a branch and open a pull request into `main`; CI must pass.
+Commit messages: lowercase conventional commits (`feat:`, `fix:`, `ci:`,
+`build:`, `chore:`, `docs:`).
 
-CHANGELOG.md: every release gets a `## [x.y.z] - YYYY-MM-DD` section
-(`### New` / `### Fixed`), written at release time from the commits since the
-last tag; Herdr shows it as the update notes. One line per change, in user
-words (what a person notices, not code), with the issue or PR number and
-`thanks @name` for contributors. Leave out internal changes and fixes for bugs
-that never shipped.
+## Releases
 
-Add `<!-- spotlight -->` below a version heading to open What's New once
-when users update to it (including skipped versions). Use `<!-- spotlight macos -->`
-or a space-separated list such as `<!-- spotlight macos linux -->` to open it
-only on those platforms: `macos`, `linux`, `windows`. Other platforms keep the
-normal corner update note and can still read the full notes manually. Without
-platforms, a spotlight applies everywhere. Keep the marker in CHANGELOG.md:
-the release uploads the file unchanged to `releases.herdr.dev/app/<v>/changelog.md`,
-and `scripts/notes-media.ts check <v>` checks images without rewriting notes.
-
-Never stop, signal, or restart someone else's app or core. Use an isolated
-app home and core session for testing.
+Bump `version` in Cargo.toml, add its `## [x.y.z] - YYYY-MM-DD` section
+(`### New` / `### Fixed`) at the top of CHANGELOG.md (a test checks the top
+entry matches Cargo.toml; Apollo shows it as What's New), then push the tag
+`v<version>`. `.github/workflows/release.yml` builds zips for macOS Apple
+silicon, macOS Intel and Windows, and publishes them with `SHA256SUMS` to the
+GitHub release. Running the workflow by hand is a dry run.

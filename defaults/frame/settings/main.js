@@ -15,7 +15,7 @@ const SECTIONS = [
   { id: "privacy", title: "Privacy", icon: "shield" },
 ];
 
-const LOOKS = { main: "Herdr", terminals: "Terminals", win98: "Herdr 98" };
+const LOOKS = { main: "Apollo", terminals: "Terminals", win98: "Apollo 98" };
 const APPEARANCES = [
   [null, "System"],
   ["light", "Light"],
@@ -674,7 +674,7 @@ export default class Settings extends View {
   alerts(t) {
     const sounds = this.person.sounds ?? {};
     const on = sounds.enabled !== false;
-    const file = (f) => (f ? f.split(/[\\/]/).pop() : "Herdr's sound");
+    const file = (f) => (f ? f.split(/[\\/]/).pop() : "Apollo's sound");
     return v_flex()
       .w_full()
       .child(this.heading(t, "Sounds"))
@@ -721,7 +721,7 @@ export default class Settings extends View {
     const primary = (id, label, f) =>
       div().id(id).px(12).py(5).rounded(7).cursor_pointer().bg(t.accent).text_color(t.accent_foreground).text_size(13).font_semibold().hover((s) => s.opacity(0.9)).on_click(f).child(label);
     const app = !u.app.updates
-      ? ["A build from source: it updates with git, not here.", null]
+      ? ["Apollo doesn't update itself: download new versions from the Releases page.", null]
       : u.app.ready
         ? [`${u.app.ready} is ready. Restart to switch now; it also switches when you quit.`, primary("st-app-update", "Restart to update", () => run("app.update"))]
         : [result, check("st-check-app")];
@@ -739,14 +739,14 @@ export default class Settings extends View {
               : ["Not checked: a build from source looks for no updates.", null];
     return v_flex()
       .w_full()
-      .child(this.heading(t, "Herdr"))
-      .child(this.row(t, `Herdr ${u.app.version}`, app[0], h_flex().gap(8).flex_none()
+      .child(this.heading(t, "Apollo"))
+      .child(this.row(t, `Apollo ${u.app.version}`, app[0], h_flex().gap(8).flex_none()
         .child(this.button(t, "st-whats-new", "What's new", () => { closeOverlay(props()?.overlay); run("app.whats_new"); }))
         .when(Boolean(app[1]), (el) => el.child(app[1]))))
       .child(div().h(18))
       .child(this.heading(t, "herdr-core"))
       .child(this.row(t, `herdr-core ${c.version ?? ""}`, core[0], core[1] ?? div()))
-      .child(div().pt(12).text_size(12.5).line_height("18px").text_color(t.dim).child("Herdr looks for both every hour and tells you in the corner. herdr-core runs your terminals, so they keep running through its updates."));
+      .child(div().pt(12).text_size(12.5).line_height("18px").text_color(t.dim).child("Apollo looks for herdr-core updates every hour and tells you in the corner; new Apollo versions are on the Releases page. herdr-core runs your terminals, so they keep running through its updates."));
   }
 
 
@@ -779,7 +779,8 @@ export default class Settings extends View {
     const s = telemetry();
     const on = s ? s.setting : this.person.telemetry !== false;
     const at = (secs) => new Date(secs * 1000).toLocaleString();
-    const why = s?.off_because ? `Off for now: ${s.off_because} is set where Herdr started.` : null;
+    const apollo = s?.off_because === "APOLLO";
+    const why = apollo ? "Off: Apollo collects no usage data." : s?.off_because ? `Off for now: ${s.off_because} is set where Apollo started.` : null;
     const body = v_flex()
       .w_full()
       .child(this.heading(t, "Usage data"))
@@ -787,7 +788,7 @@ export default class Settings extends View {
         this.row(
           t,
           "Share anonymous usage data",
-          why ?? "Once a day: which agents and features you use, how many spaces and tabs, your system and Herdr's version. Never what's in your terminals, never names of files, folders or projects.",
+          why ?? "Once a day: which agents and features you use, how many spaces and tabs, your system and Apollo's version. Never what's in your terminals, never names of files, folders or projects.",
           this.toggle(t, "st-telemetry", on, (_e, cx) =>
             this.change((p) => {
               if (on) p.telemetry = false;
@@ -800,7 +801,11 @@ export default class Settings extends View {
         this.row(
           t,
           "What we send",
-          s && !s.sends ? "This build never sends: it's built from source. You can still see what a release would send." : "Exactly what leaves your computer, word for word.",
+          apollo
+            ? "Apollo never sends usage data."
+            : s && !s.sends
+              ? "This build never sends: it's built from source. You can still see what a release would send."
+              : "Exactly what leaves your computer, word for word.",
           this.button(t, "st-telemetry-show", this.showData ? "Hide" : "Show", (_e, cx) => {
             this.showData = !this.showData;
             cx.notify();

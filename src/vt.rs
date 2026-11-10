@@ -2403,6 +2403,26 @@ mod tests {
     }
 
     #[test]
+    fn joined_lines_reject_a_file_url_run_into_the_next_word() {
+        let dir = std::env::temp_dir().join(format!("apollo-join-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("report.txt");
+        std::fs::write(&file, "").unwrap();
+        let url = crate::links::file_url(&file);
+        let mut vt = Vt::new(url.len() as u16, 3);
+        vt.write(format!("{url}\r\nand more").as_bytes());
+        let find = |text: &str, at: usize, joined: bool| {
+            let range = crate::links::find(text, at)?;
+            crate::links::candidate(&text[range.clone()], None, joined).map(|_| range)
+        };
+        assert_eq!(vt.link_at(3, 0, find).unwrap().target, url);
+        let rec = crate::links::Recorder::default();
+        crate::links::activate(&crate::links::candidate(&url, None, false).unwrap(), &rec);
+        assert_eq!(rec.calls.take(), vec![crate::links::Call::Reveal(file)]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn joined_lines_tell_find() {
         let mut vt = Vt::new(26, 4);
         vt.write(b"Visit https://example.com\r\n  and then run it");
@@ -2449,6 +2469,35 @@ mod tests {
         assert_eq!(hit.target, "https://herdr.dev");
         assert_eq!(hit.spans, vec![(0, 4, 11)]);
         assert_eq!(vt.link_at(13, 0, found), None);
+    }
+
+    #[test]
+    fn marked_file_links_only_reveal() {
+        use crate::links::{Call, Recorder, Target, activate, resolve};
+        // Not canonicalized: on Windows that adds a `\\?\` prefix the URL can't carry.
+        let dir = std::env::temp_dir().join(format!("apollo-osc8-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("report.txt");
+        std::fs::write(&file, "").unwrap();
+        let follow = |uri: &str| {
+            let mut vt = Vt::new(40, 2);
+            vt.write(format!("see \x1b]8;;{uri}\x1b\\the docs\x1b]8;;\x1b\\ now").as_bytes());
+            let hit = vt.link_at(6, 0, found).unwrap();
+            assert_eq!(hit.target, uri);
+            let target = resolve(&hit.target, None);
+            let rec = Recorder::default();
+            if let Some(t) = &target {
+                activate(t, &rec);
+            }
+            (target, rec.calls.take())
+        };
+        let (target, calls) = follow(&crate::links::file_url(&file));
+        assert!(matches!(target, Some(Target::File(_))));
+        assert_eq!(calls, vec![Call::Reveal(file.clone())]);
+        let (_, calls) = follow(&crate::links::file_url(&dir.join("gone/x.txt")));
+        assert_eq!(calls, vec![Call::Reveal(dir.clone())]);
+        assert_eq!(follow("file:///%zz"), (None, vec![]));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

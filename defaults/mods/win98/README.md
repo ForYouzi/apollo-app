@@ -1,6 +1,6 @@
-# Herdr 98
+# Apollo 98
 
-A Windows 98 layout for Herdr: `layouts/win98.json` + `themes/win98.json` +
+A Windows 98 layout for Apollo: `layouts/win98.json` + `themes/win98.json` +
 this mod. One mod, many roles (`main.js`): taskbar, desktop, window (pane
 title bars), menu (Start menu too), dialog, mines, sol, clippy. `kit.js`
 draws the Win98 bits (bevels, buttons, title bars) in whole device pixels at
@@ -25,7 +25,8 @@ bun defaults/mods/win98/art/sheet.ts /var/tmp/herdr98
 bun defaults/mods/win98/art/sounds.ts /var/tmp/herdr98
 ```
 
-Images and the contact sheet need ImageMagick (`magick`); sounds need
-FFmpeg (`ffmpeg`). Fonts are read from this mod's `fonts/` directory.
+Images and the contact sheet need ImageMagick (`magick`); icons and images
+also need `rsvg-convert` (librsvg), which draws the Apollo mark from
+`assets/icons/apollo.svg`; sounds need FFmpeg (`ffmpeg`). Fonts are read from this mod's `fonts/` directory.
 Generated mod assets go under `<root>/mods/win98/`; intermediate art and
 the contact sheet go under `<root>/art/`.

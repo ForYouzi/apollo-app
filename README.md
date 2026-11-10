@@ -1,41 +1,33 @@
-# Herdr
+# Apollo
 
-Herdr is a desktop app for terminals and coding agents. Keep work in spaces, see which agents need you, and leave terminals running when you close the window.
+Apollo is a desktop app for terminals and coding agents. Keep work in spaces, see which agents need you, and leave terminals running when you close the window.
+
+Apollo is a fork of [herdr-app](https://github.com/herdrdev/herdr-app) (Apache-2.0). It keeps Herdr's settings home, `~/.config/herdr-app`, and runs terminals in [herdr-core](https://github.com/herdrdev/herdr-core), so it shares your Herdr setup. The command is still `herdr-app`.
 
 ## Install
 
-### Linux and macOS
+Download a zip from [Apollo's releases](https://github.com/ForYouzi/apollo-app/releases):
+
+- `apollo-app-<version>-macos-aarch64.zip`: macOS on Apple silicon.
+- `apollo-app-<version>-macos-x86_64.zip`: macOS on Intel.
+- `apollo-app-<version>-windows-x86_64.zip`: Windows on x64.
+
+On macOS, unzip it and move `Apollo.app` to Applications.
+The macOS build is signed ad hoc, not notarized, so the first launch is blocked.
+Right-click Apollo and choose Open, or clear the quarantine flag once:
 
 ```sh
-curl -fsSL https://releases.herdr.dev/app/install.sh | sh
+xattr -dr com.apple.quarantine /Applications/Apollo.app
 ```
 
-Linux needs a desktop session and a working Vulkan driver. macOS builds are available for Apple Silicon; Intel Mac users can [build from source](#build-from-source). Linux builds are x86-64 and ARM64.
+On Windows, unzip the `apollo-app` folder anywhere; `apollo-app.exe` opens the app.
+The folder also holds `herdr-app.exe`, the same program: adding the folder to your PATH gives you the `herdr-app` command the docs use.
 
-The installer adds Herdr to your apps and puts the command in `~/.local/bin`.
-Add that folder to your PATH if the installer asks.
-On macOS the app lives in `~/Applications/Herdr.app`.
-For drag-and-drop installation on Apple Silicon, download [Herdr.dmg](https://releases.herdr.dev/app/Herdr.dmg) and drag Herdr to Applications.
+Apollo installs [herdr-core](https://github.com/herdrdev/herdr-core) when it is missing, and can update a core it cannot use.
 
-On macOS (Apple Silicon), you can also install with [Homebrew](https://brew.sh/):
+### Reveal files instead of opening them
 
-```sh
-brew install --cask herdr-app
-```
-
-### Windows
-
-Run in PowerShell on x64 Windows with curl and tar installed (Windows 10 1803 or newer):
-
-```powershell
-irm https://releases.herdr.dev/app/install.ps1 | iex
-```
-
-Herdr appears in the Start menu. The installer adds `%LOCALAPPDATA%\Programs\herdr-app` to your user PATH. Open a new terminal to pick it up.
-
-The shell and PowerShell installers download and run code. Read the [shell installer](distribution/install.sh) or [PowerShell installer](distribution/install.ps1) first if you prefer.
-They also install [herdr-core](https://github.com/herdrdev/herdr-core) if it is missing.
-The app can help install or update a core it cannot use.
+Cmd+click (macOS) or Ctrl+click (Windows) on a file path in terminal text shows the file selected in its folder (Finder or Explorer) instead of opening it.
 
 ## Find your work
 
@@ -72,10 +64,10 @@ Remote work keeps running when your local window closes or your laptop sleeps, a
 ## Make it yours
 
 Open the command palette to find an action by name, or open Settings to change fonts, colors, sounds and other preferences.
-The built-in layouts include Herdr, Terminals and Herdr 98.
+The built-in layouts include Apollo, Terminals and Apollo 98.
 A **layout** arranges the window. **Mods** are small JavaScript programs that draw its panels, menus and dialogs.
 
-Duplicate a shipped layout or mod before changing its structure or code. Your copies stay yours; Herdr updates the shipped ones on start.
+Duplicate a shipped layout or mod before changing its structure or code. Your copies stay yours; Apollo updates the shipped ones on start.
 Save a personal layout, mod or key file and the window reloads it.
 A broken edit keeps the last good version and reports the error.
 
@@ -85,11 +77,11 @@ Ctrl+Shift+P shows every command and its key (Cmd+Shift+P on macOS). Change any 
 
 ## Updates and privacy
 
-Installed releases check for updates in the background and download a new app beside the running one. It takes over when you quit and reopen, or choose the update action. Your terminals keep running in the core.
-Settings → Updates shows what is available. What's New opens after an update; you can open it again from the command palette.
-Builds from source do not update themselves.
+Apollo never updates itself. Download new versions from [Apollo's releases](https://github.com/ForYouzi/apollo-app/releases).
+Release builds check for and install herdr-core updates; Settings → Updates shows what is available. Your terminals keep running in the core.
+What's New opens after you install a new version; you can open it again from the command palette.
 
-Usage telemetry is on by default in releases. Turn it off in Settings → Privacy.
+Apollo builds collect and send no usage data.
 Mods are trusted code, not sandboxed extensions. Read [security and privacy](docs/security.md) before installing someone else's mod.
 
 ## For agents
@@ -118,8 +110,8 @@ Clone this repo with its submodules. Use Rust 1.95.0 and Zig 0.16.0, the version
 Linux needs the development packages listed in that workflow.
 
 ```sh
-git clone --recurse-submodules https://github.com/herdrdev/herdr-app.git
-cd herdr-app
+git clone --recurse-submodules https://github.com/ForYouzi/apollo-app.git
+cd apollo-app
 just build
 just test
 just install
@@ -128,7 +120,7 @@ just install
 Install [just](https://github.com/casey/just) to use these recipes.
 The platform installer builds a release and adds the app to your desktop.
 On Linux it links to this checkout, so keep the checkout in place.
-Quit and reopen Herdr to use the new build.
+Quit and reopen Apollo to use the new build.
 
 Documentation checks also need [Bun](https://bun.sh): `just docs-check` checks generated pages and CLI examples; `just docs-generate` refreshes the reference pages.
 

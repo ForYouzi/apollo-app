@@ -63,9 +63,10 @@ struct Calls {
     shared: BTreeMap<String, Value>,
 }
 
+/// `app`: "source" (no checks), "apollo" (a release: core checks, never the app), "current", "ready".
 fn updates(app: &str, core: &str) -> Value {
     json!({
-        "app": {"version":"0.1.0", "updates":app != "source", "ready": (app == "ready").then_some("0.1.1")},
+        "app": {"version":"0.1.0", "updates":!matches!(app, "source" | "apollo"), "ready": (app == "ready").then_some("0.1.1")},
         "core": {"version":"0.1.5", "ready":(core == "ready").then_some("0.1.6"), "managed":(core == "managed").then_some("homebrew"), "error":(core == "error").then_some("offline"), "updating":core == "updating"},
         "checked":1700000000, "checks":app != "source", "checking":false
     })
@@ -656,6 +657,24 @@ fn machine_add_needing_input_keeps_the_picker_and_shows_instructions(cx: &mut Te
 }
 
 #[gpui::test]
+fn privacy_says_why_usage_data_is_off(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let staged = Staged::new();
+    for (why, says) in [("APOLLO", "Off: Apollo collects no usage data."), ("DO_NOT_TRACK", "Off for now: DO_NOT_TRACK is set where Apollo started.")] {
+        let mut p = props();
+        p["section"] = json!("privacy");
+        let mut values = fixture(true, p, updates("apollo", "current"));
+        values.insert("telemetry".into(), json!({"enabled":false,"setting":true,"sends":why != "APOLLO","off_because":why,"endpoint":"https://invalid.example","draft":null,"queued":[],"last_sent":null}));
+        let tree = describe_with_values(cx, &staged, "frame/settings", values, None).unwrap();
+        assert!(tree.contains(says), "{why}: {tree}");
+        if why == "APOLLO" {
+            assert!(!tree.contains("Off for now") && !tree.contains("built from source"), "{why}: {tree}");
+            assert!(tree.contains("Apollo never sends usage data."), "{why}: {tree}");
+        }
+    }
+}
+
+#[gpui::test]
 fn option_key_settings_are_only_shown_on_macos(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let staged = Staged::new();
@@ -682,7 +701,7 @@ fn settings_sections_and_updates(cx: &mut TestAppContext) {
         p["section"] = json!(section);
         describe(cx, &staged, "frame/settings", true, p, updates("current", "current"), None).unwrap();
     }
-    for app in ["source", "current", "ready"] {
+    for app in ["source", "apollo", "current", "ready"] {
         for core in ["current", "ready", "error", "managed", "updating"] {
             let mut p = props();
             p["section"] = json!("updates");
@@ -693,6 +712,13 @@ fn settings_sections_and_updates(cx: &mut TestAppContext) {
                     tree.contains("check-app") && tree.contains("check-core"),
                     "both update buttons must exist: {tree}"
                 );
+            }
+            if app == "apollo" {
+                assert!(tree.contains("download new versions from the Releases page") && !tree.contains("check-app"), "apollo/{core}: {tree}");
+                assert!(tree.contains("herdr-core 0.1.5"), "apollo/{core}: the core row is missing: {tree}");
+                if core == "current" {
+                    assert!(tree.contains("check-core") && tree.contains("Up to date"), "apollo/current: core Check now missing: {tree}");
+                }
             }
         }
     }
@@ -716,7 +742,7 @@ fn settings_sections_and_updates(cx: &mut TestAppContext) {
         }
         assert!(tree.contains(if checking { "Checking" } else if succeeded { "Up to date" } else { "Check your connection" }), "check status missing: {tree}");
     }
-    eprintln!("27 settings cases, each twice: {:?}", start.elapsed());
+    eprintln!("32 settings cases, each twice: {:?}", start.elapsed());
 }
 
 #[gpui::test]
@@ -808,7 +834,7 @@ fn local_state_and_overlay_initial_descriptions(cx: &mut TestAppContext) {
             Some(&format!("this.page = {page};")),
         )
         .unwrap();
-        let expected = ["Herdr runs your terminals in the background", "Add your other machines", "Choose your panels", "Make it yours"][page - 1];
+        let expected = ["Apollo runs your terminals in the background", "Add your other machines", "Choose your panels", "Make it yours"][page - 1];
         assert!(tree.contains(expected), "welcome page {page}: {tree}");
     }
     for setup in ["", "this.sent = true;", "this.error = 'Fixture error';"] {

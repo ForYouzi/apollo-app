@@ -20,7 +20,7 @@ fn socket() -> PathBuf {
 pub fn listen(tx: async_channel::Sender<Request>) {
     let path = socket();
     if UnixStream::connect(&path).is_ok() {
-        tracing::warn!("another Herdr is serving {}; `herdr-app do` goes there", path.display());
+        tracing::warn!("another {} is serving {}; `herdr-app do` goes there", crate::brand::NAME, path.display());
         return;
     }
     let _ = std::fs::remove_file(&path);
@@ -101,10 +101,10 @@ pub fn client(args: &[String]) -> i32 {
         Err(_) if args.first().is_some_and(|v| v == "feedback") => {
             let body = crate::feedback::draft(&args[1], "", 0, "agent", "other");
             println!("{}", serde_json::to_string_pretty(&body).unwrap_or_default());
-            eprintln!("Herdr must be open to review and send this feedback. Nothing was sent; core version and layout will reflect the open window.");
+            eprintln!("{} must be open to review and send this feedback. Nothing was sent; core version and layout will reflect the open window.", crate::brand::NAME);
             return 1;
         }
-        Err(e) => return fail(&format!("no Herdr window at {}: {e}", socket().display())),
+        Err(e) => return fail(&format!("no {} window at {}: {e}", crate::brand::NAME, socket().display())),
     };
     let _ = stream.set_read_timeout(Some(Duration::from_secs(35)));
     let mut line = String::new();

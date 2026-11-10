@@ -8,16 +8,16 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
     cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
     cx.on_action(|_: &Settings, _| crate::mods::request(crate::mods::Request::Run { name: "app.settings".into(), args: serde_json::Value::Null }));
-    cx.set_menus([Menu::new("Herdr").items([
+    cx.set_menus([Menu::new(crate::brand::NAME).items([
         MenuItem::action("Settings", Settings),
         MenuItem::separator(),
         MenuItem::os_submenu("Services", SystemMenuType::Services),
         MenuItem::separator(),
-        MenuItem::action("Hide Herdr", Hide),
+        MenuItem::action(format!("Hide {}", crate::brand::NAME), Hide),
         MenuItem::action("Hide Others", HideOthers),
         MenuItem::action("Show All", ShowAll),
         MenuItem::separator(),
-        MenuItem::action("Quit Herdr", Quit),
+        MenuItem::action(format!("Quit {}", crate::brand::NAME), Quit),
     ])]);
 }
 

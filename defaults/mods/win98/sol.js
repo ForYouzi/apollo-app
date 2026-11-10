@@ -135,7 +135,7 @@ export default class Solitaire {
     if (cmd === "options" || cmd === "deck") this.open(cmd);
     if (cmd === "exit") setApp("sol", null);
     if (cmd === "help") openDialog("message", { title: "Solitaire Help", text: "Build each suit from Ace to King in the four foundations. Build the columns down in alternating colors. Only a King can fill an empty column. Click or drag cards to move them. Double-click a card to send it home." });
-    if (cmd === "about") openDialog("message", { title: "About Solitaire", text: "Solitaire\nHerdr 98\n\nKlondike. A little patience goes a long way." });
+    if (cmd === "about") openDialog("message", { title: "About Solitaire", text: "Solitaire\nApollo 98\n\nKlondike. A little patience goes a long way." });
     if (cmd === "autowin") { this.g.home = Array.from({ length: 4 }, (_, s) => Array.from({ length: 13 }, (_, r) => s * 13 + r)); this.g.stock = []; this.g.waste = []; this.g.tab = Array.from({ length: 7 }, () => []); this.victory(cx); }
   }
   card(u, c, up = true, selected = false) {

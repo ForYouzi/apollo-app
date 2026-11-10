@@ -1,4 +1,10 @@
-# Herdr changelog
+# Apollo changelog
+
+## [0.0.1] - 2026-11-10
+
+### New
+- Cmd+click (macOS) or Ctrl+click (Windows) on a file shows it selected in its folder instead of opening it.
+- Apollo name and icon; Intel Macs supported; never updates itself into Herdr.
 
 ## [0.1.14] - 2026-11-08
 

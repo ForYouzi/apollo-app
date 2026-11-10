@@ -1,0 +1,8 @@
+#!/bin/bash
+# brand-plist <version>: Info.plist from packaging/Info.plist.in; brand-plist --const NAME: one src/brand.rs value.
+set -euo pipefail
+root=$(cd "$(dirname "$0")/.." && pwd)
+const() { sed -n "s/^pub const $1: &str = \"\(.*\)\";/\1/p" "$root/src/brand.rs"; }
+if [[ ${1:-} == --const ]]; then const "${2:?}"; exit; fi
+sed -e "s|@NAME@|$(const NAME)|g" -e "s|@BUNDLE_ID@|$(const BUNDLE_ID)|g" -e "s|@EXECUTABLE@|$(const EXECUTABLE)|g" \
+  -e "s|@VERSION@|${1:?usage: brand-plist <version>}|g" "$root/packaging/Info.plist.in"

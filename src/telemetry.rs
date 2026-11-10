@@ -9,11 +9,15 @@
 //! and sends it. Nothing here may affect the app: it runs off the UI thread,
 //! never waits on anything, and every error just loses data.
 //!
+//! Apollo collects and sends nothing: no Apollo build sets `HERDR_APP_RELEASE`,
+//! so there is no endpoint, and then no worker starts (`off_because` is
+//! `APOLLO`). Its home is Herdr's (`~/.config/herdr-app`), so it never writes,
+//! reads or deletes `telemetry/` there: a released Herdr would send what it
+//! found. Only `HERDR_TELEMETRY_URL` (a test server) turns the rest on:
+//!
 //! On unless settings.json says `"telemetry": false` (that also deletes the
 //! id and anything not sent yet). `DO_NOT_TRACK`, `HERDR_TELEMETRY=0` and CI
-//! turn it off for one run. Only release builds (`HERDR_APP_RELEASE`) send,
-//! or a build pointed at a test server with `HERDR_TELEMETRY_URL`: a build
-//! from source and the sandbox collect and show, but never send.
+//! turn it off for one run.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -81,7 +85,18 @@ fn dir() -> PathBuf {
 /// Why it's off for this run, whatever the setting says.
 fn env_off() -> Option<&'static str> {
     static OFF: OnceLock<Option<&'static str>> = OnceLock::new();
-    *OFF.get_or_init(read_env_off)
+    *OFF.get_or_init(|| off_reason(read_env_off(), endpoint().as_deref()))
+}
+
+/// `APOLLO` when this build has nowhere to send: it then collects nothing and never
+/// touches `telemetry/` (it may be Herdr's, in the home both share). Else the env's reason.
+fn off_reason(env: Option<&'static str>, endpoint: Option<&str>) -> Option<&'static str> {
+    if endpoint.is_none() { Some("APOLLO") } else { env }
+}
+
+/// Off for the build, not the person: no worker runs, nothing is kept, deleted or sent.
+fn build_off() -> bool {
+    env_off() == Some("APOLLO")
 }
 
 fn read_env_off() -> Option<&'static str> {
@@ -151,12 +166,33 @@ pub fn set_setting(on: bool) {
     if ON.swap(now, Ordering::SeqCst) && !now {
         EPOCH.fetch_add(1, Ordering::SeqCst);
     }
+    if build_off() {
+        // No worker to publish: the settings screen reads `status` again.
+        crate::mods::request(crate::mods::Request::Refresh);
+    }
     send(Event::Wake);
 }
 
 /// What the settings screen shows.
 pub fn status() -> Value {
+    if build_off() {
+        return build_off_status(SETTING.load(Ordering::Relaxed));
+    }
     STATUS.lock().ok().and_then(|s| s.clone()).unwrap_or(Value::Null)
+}
+
+/// The status of a build that never collects (`setting`: settings.json's `telemetry`).
+fn build_off_status(setting: bool) -> Value {
+    json!({
+        "enabled": false,
+        "setting": setting,
+        "off_because": "APOLLO",
+        "sends": false,
+        "endpoint": ENDPOINT,
+        "draft": null,
+        "queued": [],
+        "last_sent": null,
+    })
 }
 
 /// A clean quit, handed to the worker (never waited for).
@@ -179,7 +215,16 @@ pub fn start(setting: bool) {
     }
     SETTING.store(setting, Ordering::Relaxed);
     ON.store(setting && env_off().is_none(), Ordering::Relaxed);
-    let _ = std::thread::Builder::new().name("telemetry".into()).spawn(move || Worker::new().run(rx));
+    launch(dir(), rx);
+}
+
+/// Runs the worker on its own thread over `dir`; the thread, if one started. None
+/// when the build has no endpoint: a worker that is off wipes `dir`, Herdr's data too.
+fn launch(dir: PathBuf, rx: Receiver<(u64, Event)>) -> Option<std::thread::JoinHandle<()>> {
+    if endpoint().is_none() {
+        return None;
+    }
+    std::thread::Builder::new().name("telemetry".into()).spawn(move || Worker::new(dir).run(rx)).ok()
 }
 
 // ---- the day ----------------------------------------------------------------
@@ -350,6 +395,8 @@ fn today_index() -> i64 {
 // ---- the thread -----------------------------------------------------------------
 
 struct Worker {
+    /// Where it keeps its files (`<app home>/telemetry`).
+    dir: PathBuf,
     /// Whether it was collecting when last looked (`follow_consent`).
     was_on: bool,
     epoch: u64,
@@ -367,9 +414,10 @@ struct Worker {
 }
 
 impl Worker {
-    fn new() -> Worker {
+    fn new(dir: PathBuf) -> Worker {
         let jitter = Duration::from_secs(20 + random_u64() % 100);
         Worker {
+            dir,
             was_on: false,
             epoch: EPOCH.load(Ordering::SeqCst),
             setting_shown: SETTING.load(Ordering::Relaxed),
@@ -437,7 +485,7 @@ impl Worker {
     /// Off (by the setting or for this run): nothing kept, nothing sent. On
     /// again starts fresh, with a new id.
     fn wipe(&mut self) {
-        let _ = std::fs::remove_dir_all(dir());
+        let _ = std::fs::remove_dir_all(&self.dir);
         self.day = Day::new(date(today_index()));
         self.install = None;
         self.dirty = false;
@@ -445,9 +493,9 @@ impl Worker {
 
     /// Picks up the day so far, counts this start, notes an unclean exit.
     fn begin(&mut self) {
-        let d = dir();
+        let d = self.dir.clone();
         let _ = std::fs::create_dir_all(d.join("queue"));
-        self.install = Some(install_id());
+        self.install = Some(install_id(&self.dir));
         if let Some(saved) = std::fs::read_to_string(d.join("today.json")).ok().and_then(|s| serde_json::from_str::<Day>(&s).ok()) {
             if saved.day == self.day.day {
                 self.day = saved;
@@ -492,7 +540,7 @@ impl Worker {
             Event::Quit => {
                 self.dirty = true;
                 self.save();
-                let _ = std::fs::remove_file(dir().join("running"));
+                let _ = std::fs::remove_file(self.dir.join("running"));
                 return;
             }
         }
@@ -536,7 +584,7 @@ impl Worker {
         if self.dirty
             && let Ok(text) = serde_json::to_string(&self.day)
         {
-            let _ = write_atomic(&dir().join("today.json"), &text);
+            let _ = write_atomic(&self.dir.join("today.json"), &text);
             self.dirty = false;
         }
     }
@@ -545,20 +593,20 @@ impl Worker {
     /// same bytes). Each day is frozen once: `frozen` holds the latest.
     fn freeze(&self, day: &Day) {
         let Some(install) = &self.install else { return };
-        let marker = dir().join("frozen");
+        let marker = self.dir.join("frozen");
         let latest = std::fs::read_to_string(&marker).unwrap_or_default();
         if day.day.is_empty() || day.day.as_str() <= latest.trim() {
             return;
         }
         if write_atomic(&marker, &day.day).is_ok() {
-            let _ = write_atomic(&dir().join("queue").join(format!("{}.json", day.day)), &day.report(install).to_string());
+            let _ = write_atomic(&self.dir.join("queue").join(format!("{}.json", day.day)), &day.report(install).to_string());
         }
     }
 
     /// Reports waiting, oldest first; ones too old to matter are dropped.
     fn queued(&self) -> Vec<(PathBuf, String)> {
         let oldest = date(today_index() - KEEP_DAYS);
-        let mut out: Vec<(PathBuf, String)> = std::fs::read_dir(dir().join("queue"))
+        let mut out: Vec<(PathBuf, String)> = std::fs::read_dir(self.dir.join("queue"))
             .into_iter()
             .flatten()
             .flatten()
@@ -589,7 +637,7 @@ impl Worker {
             match post(&url, &body) {
                 Some(code) if (200..300).contains(&code) => {
                     let sent = json!({ "at": unix_now(), "report": serde_json::from_str::<Value>(&body).unwrap_or(Value::Null) });
-                    let _ = write_atomic(&dir().join("last-sent.json"), &sent.to_string());
+                    let _ = write_atomic(&self.dir.join("last-sent.json"), &sent.to_string());
                     let _ = std::fs::remove_file(&path);
                     self.failures = 0;
                 }
@@ -615,7 +663,7 @@ impl Worker {
         } else {
             Vec::new()
         };
-        let last = on.then(|| std::fs::read_to_string(dir().join("last-sent.json")).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok())).flatten();
+        let last = on.then(|| std::fs::read_to_string(self.dir.join("last-sent.json")).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok())).flatten();
         let status = json!({
             "enabled": on,
             "setting": SETTING.load(Ordering::Relaxed),
@@ -640,8 +688,8 @@ impl Worker {
 }
 
 /// The random id, made on first use and kept until telemetry is turned off.
-fn install_id() -> String {
-    let path = dir().join("id");
+fn install_id(dir: &std::path::Path) -> String {
+    let path = dir.join("id");
     if let Ok(id) = std::fs::read_to_string(&path)
         && id.len() == 32
         && id.bytes().all(|b| b.is_ascii_hexdigit())
@@ -717,6 +765,55 @@ mod tests {
         assert_eq!(version("hc 0.1.5-acmeclient"), "other");
         assert_eq!(version("0.1.5-rc.x"), "other");
         assert_eq!(version("dev"), "other");
+    }
+
+    #[test]
+    fn no_endpoint_is_off_whatever_the_env_says() {
+        assert_eq!(off_reason(None, None), Some("APOLLO"));
+        assert_eq!(off_reason(Some("DO_NOT_TRACK"), None), Some("APOLLO"));
+        assert_eq!(off_reason(None, Some("http://127.0.0.1:9/v1/report")), None);
+        assert_eq!(off_reason(Some("CI"), Some("http://127.0.0.1:9/v1/report")), Some("CI"));
+        assert_eq!(build_off_status(true)["off_because"], "APOLLO");
+        assert_eq!(build_off_status(true)["enabled"], false);
+        assert_eq!(build_off_status(true)["setting"], true);
+        assert_eq!(build_off_status(false)["setting"], false);
+        assert_eq!(build_off_status(true)["sends"], false);
+    }
+
+    /// Apollo shares Herdr's home (`~/.config/herdr-app`), and a released Herdr sends
+    /// whatever day and queue it finds there. A build with no endpoint never touches it.
+    #[test]
+    fn a_build_without_an_endpoint_leaves_the_shared_telemetry_alone() {
+        assert!(endpoint().is_none(), "run without HERDR_TELEMETRY_URL");
+        let root = std::env::temp_dir().join(format!("herdr-telemetry-shared-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        // Herdr's own data, from before Apollo ever ran.
+        let herdr = root.join("herdr").join("telemetry");
+        std::fs::create_dir_all(herdr.join("queue")).unwrap();
+        let today = br#"{"day":"2026-11-09","startups":3}"#;
+        let queued = br#"{"v":1,"day":"2026-11-08","install":"0123456789abcdef0123456789abcdef"}"#;
+        std::fs::write(herdr.join("today.json"), today).unwrap();
+        std::fs::write(herdr.join("queue").join("2026-11-08.json"), queued).unwrap();
+        // A home Apollo has to itself.
+        let fresh = root.join("fresh").join("telemetry");
+        for dir in [&herdr, &fresh] {
+            let (tx, rx) = std::sync::mpsc::sync_channel(8);
+            let worker = launch(dir.clone(), rx);
+            let epoch = EPOCH.load(Ordering::SeqCst);
+            let _ = tx.send((epoch, Event::Observe(Observation { foreground: true, terminals: 2, ..Observation::default() })));
+            let _ = tx.send((epoch, Event::Count("core_lost")));
+            let _ = tx.send((epoch, Event::Quit));
+            drop(tx);
+            if let Some(worker) = worker {
+                worker.join().unwrap();
+            }
+        }
+        assert_eq!(std::fs::read(herdr.join("today.json")).unwrap(), today);
+        assert_eq!(std::fs::read(herdr.join("queue").join("2026-11-08.json")).unwrap(), queued);
+        let names: Vec<_> = std::fs::read_dir(&herdr).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(names.len(), 2, "{names:?}");
+        assert!(!fresh.exists(), "a fresh home got a telemetry folder");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

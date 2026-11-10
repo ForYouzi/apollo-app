@@ -1,4 +1,4 @@
-# Builds this checkout and installs it for the current Windows user.
+# Builds this checkout of Apollo and installs it for the current Windows user.
 function Install-HerdrAppFiles($Binary, $Icon, $Destination) {
     $ErrorActionPreference = "Stop"
     $Destination = [IO.Path]::GetFullPath($Destination)
@@ -33,7 +33,7 @@ function Install-HerdrAppFiles($Binary, $Icon, $Destination) {
         }
         if ($installed -and (Test-Path -LiteralPath $backup)) {
             try { Remove-Item -LiteralPath $backup -Recurse -Force }
-            catch { Write-Warning "Previous build remains at $backup. Remove it after quitting Herdr." }
+            catch { Write-Warning "Previous build remains at $backup. Remove it after quitting Apollo." }
         }
     }
 }
@@ -46,14 +46,15 @@ if ($env:OS -ne "Windows_NT") { throw "This installer requires Windows." }
 Push-Location "$PSScriptRoot\.."
 try {
     cargo build --release --locked --target-dir target
-    if ($LASTEXITCODE) { throw "Herdr build failed (exit $LASTEXITCODE)." }
+    if ($LASTEXITCODE) { throw "Apollo build failed (exit $LASTEXITCODE)." }
     $dir = Join-Path $env:LOCALAPPDATA "Programs\herdr-app"
-    Install-HerdrAppFiles "target\release\herdr-app.exe" "assets\icons\herdr-ui-icon-clean.svg" $dir
+    Install-HerdrAppFiles "target\release\herdr-app.exe" "assets\icons\apollo.svg" $dir
 } finally {
     Pop-Location
 }
 
-$menu = Join-Path ([Environment]::GetFolderPath("Programs")) "Herdr.lnk"
+# The Start menu shortcut shows the brand name (src/brand.rs NAME); files and PATH keep herdr-app.
+$menu = Join-Path ([Environment]::GetFolderPath("Programs")) "Apollo.lnk"
 $link = (New-Object -ComObject WScript.Shell).CreateShortcut($menu)
 $link.TargetPath = Join-Path $dir "herdr-app.exe"
 $link.WorkingDirectory = $env:USERPROFILE
@@ -75,4 +76,4 @@ try {
     $key.Close()
 }
 if (($env:Path -split ";") -notcontains $dir) { $env:Path += ";$dir" }
-Write-Host "Installed herdr-app. Quit and reopen Herdr to use the new build."
+Write-Host "Installed Apollo (herdr-app). Quit and reopen Apollo to use the new build."

@@ -894,10 +894,8 @@ impl TerminalView {
         let (col, row) = (x / f32::from(g.cell.width), y / f32::from(g.cell.height));
         let mut target = None;
         let hit = g.vt.link_at(col as u16, row as u16, |text, at, joined| {
-            // In lines joined back together only a file that exists proves the join right.
             if let Some(range) = links::find(text, at)
-                && let Some(link) = links::resolve(&text[range.clone()], self.cwd.as_deref())
-                && (!joined || matches!(link, links::Target::File(_)))
+                && let Some(link) = links::candidate(&text[range.clone()], self.cwd.as_deref(), joined)
             {
                 target = Some(LinkTarget::External(link));
                 return Some(range);
@@ -1129,6 +1127,21 @@ fn paste_image_bytes(format: ImageFormat, bytes: &[u8]) -> Option<(ImageFormat, 
     let mut png = std::io::Cursor::new(Vec::new());
     image.write_to(&mut png, image::ImageFormat::Png).ok()?;
     Some((ImageFormat::Png, std::borrow::Cow::Owned(png.into_inner())))
+}
+
+/// A clicked link: files and URLs go to the opener on a worker thread (deciding what
+/// a link means touches the filesystem, which must never stall the UI); a terminal
+/// address comes back to peek at.
+fn follow(target: LinkTarget, opener: Arc<dyn links::Opener + Send + Sync>) -> Option<String> {
+    match target {
+        LinkTarget::External(target) => {
+            if let Err(e) = std::thread::Builder::new().name("apollo-link".into()).spawn(move || links::activate(&target, &*opener)) {
+                tracing::warn!("cannot start a thread to follow a link: {e}");
+            }
+            None
+        }
+        LinkTarget::Terminal(address) => Some(address),
+    }
 }
 
 fn link_mods(m: &Modifiers) -> bool {
@@ -1948,9 +1961,8 @@ impl Render for TerminalView {
                 if link_mods(&ev.modifiers)
                     && let Some((target, _)) = this.link_at(ev.position)
                 {
-                    match target {
-                        LinkTarget::External(target) => links::open(&target),
-                        LinkTarget::Terminal(address) => cx.emit(TerminalEvent::Peek(address)),
+                    if let Some(address) = follow(target, Arc::new(links::SystemOpener)) {
+                        cx.emit(TerminalEvent::Peek(address));
                     }
                     return;
                 }
@@ -2178,6 +2190,41 @@ impl Focusable for TerminalView {
 mod tests {
     use super::{ScrollTarget, pages_to_lines, scroll_target};
     use serde_json::{Value, json};
+
+    /// An opener that reports each call, and the thread it came on, over a channel.
+    struct Remote(std::sync::Mutex<std::sync::mpsc::Sender<(crate::links::Call, std::thread::ThreadId)>>);
+
+    impl Remote {
+        fn send(&self, call: crate::links::Call) {
+            let _ = self.0.lock().unwrap().send((call, std::thread::current().id()));
+        }
+    }
+
+    impl crate::links::Opener for Remote {
+        fn reveal(&self, item: &std::path::Path) -> std::io::Result<()> {
+            self.send(crate::links::Call::Reveal(item.into()));
+            Ok(())
+        }
+        fn open_folder(&self, dir: &std::path::Path) {
+            self.send(crate::links::Call::OpenFolder(dir.into()));
+        }
+        fn open_url(&self, url: &str) {
+            self.send(crate::links::Call::OpenUrl(url.into()));
+        }
+    }
+
+    #[test]
+    fn following_a_link_goes_through_the_opener_off_the_ui_thread() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let opener: std::sync::Arc<dyn crate::links::Opener + Send + Sync> = std::sync::Arc::new(Remote(std::sync::Mutex::new(tx)));
+        let dir = std::env::temp_dir();
+        assert_eq!(super::follow(super::LinkTarget::External(crate::links::Target::File(dir.clone())), opener.clone()), None);
+        let (call, thread) = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("the opener is called");
+        assert_eq!(call, crate::links::Call::OpenFolder(std::fs::canonicalize(&dir).unwrap()));
+        assert_ne!(thread, std::thread::current().id());
+        assert_eq!(super::follow(super::LinkTarget::Terminal("t1".into()), opener), Some("t1".into()));
+        assert!(rx.recv_timeout(std::time::Duration::from_millis(200)).is_err());
+    }
 
     #[gpui::test]
     fn attach_errors_do_not_announce_a_terminal_exit(cx: &mut gpui::TestAppContext) {

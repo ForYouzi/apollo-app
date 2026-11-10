@@ -1,18 +1,16 @@
-//! The app's own updates. An installed app (Linux: `~/.local/share/herdr-app`,
-//! macOS: `Herdr.app`) checks `releases.herdr.dev/app/latest.json` a little
-//! after it opens and every hour, downloads a newer build for this
-//! machine, checks its sha256 and unpacks it next to itself (`<install>.new`).
-//! The frame then shows "Restart"; the swap happens on restart or the next
-//! quit, or before opening the next window after a crash. The first start
-//! after a swap runs `hc update` for the core.
+//! Updates. Apollo never replaces itself: the app server (`releases.herdr.dev/app`)
+//! ships Herdr, not Apollo, so the app checker is off for good (`APP_UPDATES`) and
+//! `HERDR_APP_RELEASE` is never set. Apollo releases are on the GitHub releases page.
 //!
-//! A build from source never updates: only `scripts/package` (the release
-//! builds) sets `HERDR_APP_RELEASE`. `scripts/install-macos` makes a
-//! Herdr.app too, so the install's shape alone can't tell.
+//! The core (herdr-core) keeps updating. A release build (`APOLLO_RELEASE` set at
+//! build time) checks `core/latest.json` a little after it opens and every hour;
+//! a build from source checks only when `HERDR_RELEASES_URL` points at a test
+//! server. A newer core of the same generation is offered, unless a package
+//! manager owns it. Within a generation a newer core only adds.
 //!
-//! The core is checked on the same clock (`core/latest.json`): a newer core
-//! of the same generation is offered (also applied after an app update), unless
-//! a package manager owns it. Within a generation a newer core only adds.
+//! The app-update machinery below (staging `<install>.new`, the swap on restart
+//! or quit) stays but never runs: the checker, `apply` and `apply_on_startup`
+//! are gated on `checks_app`, and the rest only acts after a swap.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -35,7 +33,7 @@ fn find_root() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?.canonicalize().ok()?;
     let dir = exe.parent()?;
     if cfg!(target_os = "macos") {
-        // Herdr.app/Contents/MacOS/Herdr
+        // Apollo.app/Contents/MacOS/Apollo
         let bundle = dir.parent()?.parent()?;
         (bundle.extension()? == "app").then(|| bundle.to_path_buf())
     } else {
@@ -116,13 +114,40 @@ pub fn set_core(version: Option<String>, managed: Option<String>) {
     c.managed = managed;
 }
 
+/// Apollo never replaces itself: the app server is Herdr's.
+const APP_UPDATES: bool = false;
+
 fn checks_app() -> Option<PathBuf> {
-    root().filter(|_| option_env!("HERDR_APP_RELEASE").is_some() || std::env::var_os("HERDR_RELEASES_URL").is_some())
+    checks_app_in(root(), std::env::var_os("HERDR_RELEASES_URL").is_some())
 }
 
-/// A release build checks the core; a source build only when pointed at a test release server.
-fn checks_core() -> bool {
-    option_env!("HERDR_APP_RELEASE").is_some() || std::env::var_os("HERDR_RELEASES_URL").is_some()
+/// `root`: where the app is installed (`root()`), if anywhere.
+fn checks_app_in(root: Option<PathBuf>, _releases_url: bool) -> Option<PathBuf> {
+    root.filter(|_| APP_UPDATES)
+}
+
+#[derive(Debug, PartialEq)]
+enum Product {
+    App,
+    Core,
+}
+
+/// What each check (hourly, or "Check now") asks the release server for.
+fn to_check(app: bool, core: bool) -> Vec<Product> {
+    [(app, Product::App), (core, Product::Core)].into_iter().filter_map(|(on, p)| on.then_some(p)).collect()
+}
+
+/// What the checker looks for (hourly and on "Check now"): the app where it's installed
+/// and `APP_UPDATES` allows it (never), herdr-core in a release build (`APOLLO_RELEASE`)
+/// or when `HERDR_RELEASES_URL` points at a test server.
+fn plan(root: Option<PathBuf>, releases_url: bool, release: bool) -> (Option<PathBuf>, Vec<Product>) {
+    let app = checks_app_in(root, releases_url);
+    let products = to_check(app.is_some(), core_gate(release, releases_url));
+    (app, products)
+}
+
+fn core_gate(release: bool, releases_url: bool) -> bool {
+    release || releases_url
 }
 
 /// For the settings screen: both programs, what's waiting, when we last looked.
@@ -153,9 +178,8 @@ fn sleep(d: Duration) {
 
 /// Starts checking in the background: the app if it's an installed release, the core too.
 pub fn start() {
-    let app = checks_app();
-    let core = checks_core();
-    if app.is_none() && !core {
+    let (app, products) = plan(root(), std::env::var_os("HERDR_RELEASES_URL").is_some(), option_env!("APOLLO_RELEASE").is_some());
+    if products.is_empty() {
         tracing::info!("a build from source: no updates");
         return;
     }
@@ -165,34 +189,42 @@ pub fn start() {
         sleep(Duration::from_secs(10));
         loop {
             CHECKING.store(true, Ordering::Relaxed);
-            let mut wait = EVERY;
-            let mut succeeded = true;
-            if let Some(root) = &app {
-                match check(root) {
-                    Ok(found) => {
-                        if found.is_some() {
-                            *READY.lock().unwrap() = found;
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!("update check: {e}");
-                        crate::telemetry::count("app_update_failed");
-                        wait = RETRY;
-                        succeeded = false;
-                    }
-                }
-            }
-            if core && let Err(e) = check_core() {
-                tracing::warn!("core update check: {e}");
-                wait = RETRY;
-                succeeded = false;
-            }
+            let succeeded = check_pass(&products, app.as_deref(), &releases(), &CORE);
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
             *CHECKED.lock().unwrap() = checked_at(succeeded, now);
             CHECKING.store(false, Ordering::Relaxed);
-            sleep(wait);
+            sleep(if succeeded { EVERY } else { RETRY });
         }
     });
+}
+
+/// One check of `products` against `releases`: what the hourly check and "Check now" run.
+/// False if any part failed (offline, a damaged file).
+fn check_pass(products: &[Product], app: Option<&Path>, releases: &str, core: &Mutex<CoreInfo>) -> bool {
+    let mut succeeded = true;
+    if products.contains(&Product::App)
+        && let Some(root) = app
+    {
+        match check_from(root, releases) {
+            Ok(found) => {
+                if found.is_some() {
+                    *READY.lock().unwrap() = found;
+                }
+            }
+            Err(e) => {
+                tracing::warn!("update check: {e}");
+                crate::telemetry::count("app_update_failed");
+                succeeded = false;
+            }
+        }
+    }
+    if products.contains(&Product::Core)
+        && let Err(e) = check_core(releases, core)
+    {
+        tracing::warn!("core update check: {e}");
+        succeeded = false;
+    }
+    succeeded
 }
 
 fn checked_at(succeeded: bool, now: u64) -> Option<u64> {
@@ -200,18 +232,18 @@ fn checked_at(succeeded: bool, now: u64) -> Option<u64> {
 }
 
 /// Looks for a newer core of this app's generation.
-fn check_core() -> Result<(), String> {
+fn check_core(releases: &str, core: &Mutex<CoreInfo>) -> Result<(), String> {
     let (have, managed) = {
-        let c = CORE.lock().unwrap();
+        let c = core.lock().unwrap();
         (c.version.clone(), c.managed.clone())
     };
     let Some(have) = have else { return Ok(()) };
     if managed.is_some() {
         return Ok(());
     }
-    let latest = latest_core()?;
+    let latest = latest_core_from(releases)?;
     let same = latest.generation == Some(crate::hc::GENERATION);
-    CORE.lock().unwrap().ready = (same && newer(&latest.version, &have)).then_some(latest.version);
+    core.lock().unwrap().ready = (same && newer(&latest.version, &have)).then_some(latest.version);
     Ok(())
 }
 
@@ -222,7 +254,11 @@ struct CoreRelease {
 }
 
 fn latest_core() -> Result<CoreRelease, String> {
-    let text = curl_text(&format!("{}/core/latest.json", releases()))?;
+    latest_core_from(&releases())
+}
+
+fn latest_core_from(releases: &str) -> Result<CoreRelease, String> {
+    let text = curl_text(&format!("{releases}/core/latest.json"))?;
     serde_json::from_str(&text).map_err(|e| format!("core/latest.json: {e}"))
 }
 
@@ -265,10 +301,6 @@ pub fn update_core() {
 }
 
 /// Downloads the latest release if it's newer. Ok(Some): a version is ready.
-fn check(root: &Path) -> Result<Option<String>, String> {
-    check_from(root, &releases())
-}
-
 fn check_from(root: &Path, releases: &str) -> Result<Option<String>, String> {
     let path = "app/latest.json";
     let text = curl_text(&format!("{releases}/{path}"))?;
@@ -386,7 +418,7 @@ fn run(cmd: &mut Command) -> Result<(), String> {
 
 fn exe_in(app: &Path) -> PathBuf {
     if cfg!(target_os = "macos") {
-        app.join("Contents/MacOS/Herdr")
+        app.join("Contents/MacOS").join(crate::brand::EXECUTABLE)
     } else {
         app.join(format!("herdr-app{}", std::env::consts::EXE_SUFFIX))
     }
@@ -470,7 +502,11 @@ pub fn apply_on_startup() -> bool {
 /// Windows lets a running program's folder be renamed, not deleted: the old
 /// one goes on the next start (`after_update`).
 pub fn apply() -> bool {
-    let Some(root) = root() else { return false };
+    apply_in(root())
+}
+
+fn apply_in(root: Option<PathBuf>) -> bool {
+    let Some(root) = checks_app_in(root, std::env::var_os("HERDR_RELEASES_URL").is_some()) else { return false };
     let staged = staged_version(&root);
     if ready().as_deref() != staged.as_deref() || !staged.as_deref().is_some_and(|version| newer(version, env!("CARGO_PKG_VERSION"))) {
         return false;
@@ -528,16 +564,22 @@ fn relaunch_expected(expected: Option<&str>) -> bool {
     }
 }
 
+/// The shell command that opens the bundle or folder `$1` again.
+#[cfg(unix)]
+fn reopen(expected: bool) -> String {
+    // LaunchServices need not preserve the startup guard or an isolated home.
+    if cfg!(target_os = "macos") {
+        if expected { format!("exec \"$1/Contents/MacOS/{}\"", crate::brand::EXECUTABLE) } else { "open \"$1\"".to_owned() }
+    } else {
+        "exec \"$1/herdr-app\"".to_owned()
+    }
+}
+
 /// Opens the app again once this process has exited (after `apply`).
 #[cfg(unix)]
 fn relaunch_expected(expected: Option<&str>) -> bool {
     let Some(root) = root() else { return false };
-    // LaunchServices need not preserve the startup guard or an isolated home.
-    let open = if cfg!(target_os = "macos") {
-        if expected.is_some() { "exec \"$1/Contents/MacOS/Herdr\"" } else { "open \"$1\"" }
-    } else {
-        "exec \"$1/herdr-app\""
-    };
+    let open = reopen(expected.is_some());
     let script = format!("while kill -0 \"$0\" 2>/dev/null; do sleep 0.1; done; {open}");
     let spawned = {
         use std::os::unix::process::CommandExt;
@@ -607,6 +649,151 @@ pub fn after_update() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_bundle_executable_is_the_brand() {
+        let want = format!("Contents/MacOS/{}", crate::brand::EXECUTABLE);
+        assert!(exe_in(Path::new("/x/Apollo.app")).ends_with(&want));
+        assert!(reopen(true).contains(&want), "{}", reopen(true));
+        assert_eq!(reopen(false), "open \"$1\"");
+    }
+
+    #[test]
+    fn apollo_never_updates_itself() {
+        assert!(!apply());
+        let s = status();
+        for k in ["notes", "core", "checked", "checks", "checking"] {
+            assert!(s.get(k).is_some(), "{k}");
+        }
+        assert_eq!(s["app"]["updates"], false);
+        assert_eq!(s["app"]["version"], env!("CARGO_PKG_VERSION"));
+    }
+
+    /// Every file under `dir` and its bytes.
+    #[cfg(unix)]
+    fn snapshot(dir: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+        let mut out = std::collections::BTreeMap::new();
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                } else {
+                    out.insert(p.clone(), std::fs::read(&p).unwrap());
+                }
+            }
+        }
+        out
+    }
+
+    /// A real installed bundle with a verified-looking staged update beside it:
+    /// the gate must not check, probe, swap or remove anything.
+    #[cfg(unix)]
+    #[test]
+    fn an_installed_bundle_with_a_staged_update_is_left_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("apollo-update-gate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let root = dir.join(if cfg!(target_os = "macos") { crate::brand::BUNDLE } else { "apollo-app" });
+        let probed = dir.join("probed");
+        let staged = beside(&root, ".new");
+        for (app, version) in [(&root, env!("CARGO_PKG_VERSION")), (&staged, "99.0.0")] {
+            let exe = exe_in(app);
+            std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+            std::fs::write(&exe, format!("#!/bin/sh\ntouch '{}'\necho 'herdr-app {version}'\n", probed.display())).unwrap();
+            std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        std::fs::write(beside(&root, ".new.json"), r#"{"version":"99.0.0"}"#).unwrap();
+        let before = snapshot(&dir);
+        assert!(before.len() == 3 && root.is_dir() && staged.is_dir());
+
+        assert_eq!(checks_app_in(Some(root.clone()), false), None);
+        assert_eq!(checks_app_in(Some(root.clone()), true), None);
+        assert!(!apply_in(Some(root.clone())));
+
+        assert!(!probed.exists(), "the staged executable was run");
+        assert_eq!(snapshot(&dir), before, "the bundle or the staged update changed");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// With app updates off, "Check now" (and the hourly check) asks for herdr-core only.
+    #[test]
+    fn check_now_asks_for_the_core_only() {
+        let root = Some(PathBuf::from("/x/Apollo.app"));
+        assert_eq!(to_check(checks_app_in(root.clone(), true).is_some(), true), [Product::Core]);
+        assert_eq!(to_check(checks_app_in(root, false).is_some(), false), Vec::<Product>::new());
+        assert_eq!(to_check(true, true), [Product::App, Product::Core]);
+        assert_eq!(to_check(true, false), [Product::App]);
+    }
+
+    /// "Check now" end to end, against a local release server: it wakes the checker,
+    /// whose pass asks for `core/latest.json` and nothing under `app/`, even when installed.
+    #[test]
+    fn check_now_runs_a_core_only_check() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::{Arc, Mutex};
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let url = format!("http://{addr}");
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        let server = std::thread::spawn({
+            let seen = seen.clone();
+            move || {
+                for stream in listener.incoming() {
+                    let mut stream = stream.unwrap();
+                    stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                    let mut request = Vec::new();
+                    while !request.ends_with(b"\r\n\r\n") {
+                        let mut byte = [0];
+                        stream.read_exact(&mut byte).unwrap();
+                        request.push(byte[0]);
+                    }
+                    let path = String::from_utf8_lossy(&request).split(' ').nth(1).unwrap_or_default().to_owned();
+                    if path == "/stop" {
+                        return;
+                    }
+                    seen.lock().unwrap().push(path.clone());
+                    if path == "/core/latest.json" {
+                        let body = format!(r#"{{"version":"99.0.0","generation":{}}}"#, crate::hc::GENERATION);
+                        write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+                    } else {
+                        write!(stream, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+                    }
+                }
+            }
+        });
+
+        // An installed app pointed at a release server: the most an app check could want.
+        let (app, products) = plan(Some(PathBuf::from("/nonexistent/Apollo.app")), true, true);
+        let core = Mutex::new(CoreInfo { version: Some("0.0.1".into()), ..Default::default() });
+        // The checker thread, parked as between checks; "Check now" must wake it.
+        let checker = std::thread::spawn(move || {
+            let woke = std::time::Instant::now();
+            sleep(Duration::from_secs(20));
+            let woke = woke.elapsed();
+            (woke, check_pass(&products, app.as_deref(), &url, &core), core.into_inner().unwrap().ready)
+        });
+        check_now();
+        let (woke, succeeded, ready) = checker.join().unwrap();
+        write!(std::net::TcpStream::connect(addr).unwrap(), "GET /stop HTTP/1.1\r\n\r\n").unwrap();
+        server.join().unwrap();
+
+        assert!(woke < Duration::from_secs(10), "Check now did not wake the checker ({woke:?})");
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen, ["/core/latest.json"], "the check asked for something besides the core");
+        assert!(!seen.iter().any(|p| p.starts_with("/app/")));
+        assert!(succeeded, "the core check failed");
+        assert_eq!(ready.as_deref(), Some("99.0.0"));
+    }
+
+    #[test]
+    fn core_gate_table() {
+        assert_eq!([core_gate(false, false), core_gate(true, false), core_gate(false, true), core_gate(true, true)], [false, true, true, true]);
+    }
 
     #[test]
     fn failed_check_clears_success_and_recovery_records_a_new_time() {

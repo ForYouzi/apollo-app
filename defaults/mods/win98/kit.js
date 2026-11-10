@@ -8,6 +8,7 @@
 import { div, svg, image, PathBuilder, Background } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import { settings, shared, setShared, playSound, run, layout, openOverlay, closeOverlay, exec, window as appWindow } from "herdr";
+import { openableUrl } from "./url.js";
 
 export const C = {
   face: "#c0c0c0",
@@ -393,7 +394,7 @@ export function perform(act) {
   if (act.dialog) openDialog(act.dialog.kind, act.dialog);
   if (act.app) setApp(act.app, "open");
   if (act.shared) setShared(act.shared[0], act.shared[1]);
-  if (act.url) {
+  if (act.url && openableUrl(act.url)) {
     const mac = appWindow()?.platform === "macos";
     exec(mac ? "open" : "xdg-open", [act.url]).catch(() => {});
   }
@@ -403,7 +404,7 @@ export { closeOverlay };
 
 // ---- sounds
 
-/** Plays a Herdr 98 sound unless sounds are off (settings, or the speaker in the tray). */
+/** Plays an Apollo 98 sound unless sounds are off (settings, or the speaker in the tray). */
 export function sfx(name) {
   if (settings()?.sounds?.enabled === false) return;
   if (shared("win98.mute") === true) return;

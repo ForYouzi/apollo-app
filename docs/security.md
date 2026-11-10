@@ -2,7 +2,7 @@
 
 ## Mods have your access
 
-A mod is trusted JavaScript running inside Herdr. It can run programs with your environment, fetch URLs and read files.
+A mod is trusted JavaScript running inside Apollo. It can run programs with your environment, fetch URLs and read files.
 The built-in file API limits writes to the app home, but a mod can run a program to write elsewhere. That is not a security boundary.
 Mods can also run programs on connected machines.
 
@@ -16,7 +16,7 @@ The default app home is `~/.config/herdr-app`, including on macOS and Windows (u
 
 This folder holds your settings, keys, layouts, mods, generated agent guide and API types.
 It also holds mod data, shared state, window positions, this screen's focus and zoom, update notes and cached media, and telemetry while enabled.
-Mods may store sensitive data here. Herdr does not encrypt this folder.
+Mods may store sensitive data here. Apollo does not encrypt this folder.
 The [installed guide's file map](../defaults/AGENTS.md#the-files) explains the files.
 
 Spaces, tabs and splits are stored in each machine's core document, not in the app home.
@@ -29,28 +29,25 @@ Remote connections use SSH through the core.
 
 ## Updates and signing
 
-Installed releases check the Herdr release service, download an update, and check its SHA-256 checksum against the release manifest before unpacking it.
-The app switches to the downloaded version on quit. Source builds do not update themselves.
-Core updates are handled separately by the core's updater.
+Apollo never updates itself, in release builds or source builds. Download new versions from [Apollo's releases](https://github.com/ForYouzi/apollo-app/releases); each release lists SHA-256 checksums in `SHA256SUMS`.
+A checksum published beside the download detects a damaged file; it is not an independent signature.
 
-A checksum from the same service detects a damaged download; it is not an independent signature on the manifest.
-The app does not verify a separate cryptographic signature on update manifests.
+herdr-core keeps updating. Release builds check `https://releases.herdr.dev` for a newer core of the same generation, and Settings → Updates installs it with the core's own updater (`hc update`). A core a package manager owns is left to that package manager.
 
-The release pipeline supports Apple Developer ID signing on macOS and Azure artifact signing on Windows when their credentials are configured.
-Without them, packages can be unsigned or ad hoc signed.
-On macOS the installer and updater verify certificate-signed bundles and preserve their signatures.
-Apple notarization is tested separately; it is not required for publishing a release.
-Do not assume every download is notarized or signed.
+Apollo's published macOS builds are ad hoc signed and not notarized (the release workflow has no Developer ID certificate; `scripts/package` signs with one only when `APPLE_CERTIFICATE_P12` is set). Windows builds are not signed.
+Do not assume a download is notarized or certificate-signed.
 
 ## Telemetry
 
-Usage telemetry is **on by default**. Release builds send a small daily report to `https://telemetry.herdr.dev/v1/report` with a random install ID.
+Apollo does not collect or send usage data: no build sets `HERDR_APP_RELEASE`, so the app has no report endpoint, and without one it keeps no usage report at all.
+Apollo shares its home with Herdr, and it never writes, reads or deletes the `telemetry` folder there; Herdr's own reports stay Herdr's.
+**Settings → Privacy** says "Off: Apollo collects no usage data." whatever the setting says.
+Only if you point `HERDR_TELEMETRY_URL` at a server does the app collect a small daily usage report, as below, and send it there.
 Reports include app and core versions, OS and architecture, bucketed usage time and counts, known agent names, built-in layout names, mod counts, app command names, and fixed event counters.
 Custom layout names become `custom`; custom mod names are not sent.
 Terminal text, prompts, file contents, folder paths and free-text names are not included.
 
-Turn it off in **Settings → Privacy**. That page also lets you inspect the report.
-Or set this field in your existing `settings.json`:
+With `HERDR_TELEMETRY_URL` set, turn it off in **Settings → Privacy**, or set this field in your existing `settings.json`:
 
 ```json
 {
@@ -58,11 +55,10 @@ Or set this field in your existing `settings.json`:
 }
 ```
 
-Turning it off deletes the local install ID and unsent reports. It cannot recall reports already sent.
+Turning it off deletes the local install ID and unsent reports.
 For one run, set `DO_NOT_TRACK=1` or `HERDR_TELEMETRY=0`. CI environments disable collection too.
-Ordinary source builds collect locally while enabled but do not send, unless pointed at a test endpoint with `HERDR_TELEMETRY_URL`.
 
 Telemetry being off does not stop update checks, mod network requests or feedback you choose to send.
 Feedback is drafted for you to review and send, not sent silently.
 
-[Back to Herdr](../README.md)
+[Back to Apollo](../README.md)

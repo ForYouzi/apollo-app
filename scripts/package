@@ -1,16 +1,16 @@
 #!/bin/bash
-# Builds a release of the app for this machine and packs it:
+# Builds a release of Apollo for this machine and zips it:
 #
-#   scripts/package            -> dist/herdr-app-<os>-<arch>.tar.gz
+#   scripts/package            -> dist/apollo-app-<version>-<os>-<arch>.zip
 #   scripts/package <triple>   -> the same for another supported Rust target
 #
-# Linux: a folder holding herdr-app and the icon.
-# macOS: Herdr.app, signed with APPLE_CERTIFICATE_P12 when available,
-# otherwise ad hoc. The notarized DMG is a separate, non-blocking CI job.
-# Windows (Git Bash): a folder holding herdr-app.exe and the icon.
-# Windows has curl and tar too, so the app updates the same way.
-# No core inside: the installer and the app install the core's own release
+# macOS: Apollo.app, signed with APPLE_CERTIFICATE_P12 when available,
+# otherwise ad hoc (scripts/mac-sign).
+# Windows (Git Bash): an apollo-app folder holding apollo-app.exe, herdr-app.exe
+# (the same binary, so `herdr-app …` works with the folder on PATH) and the icon.
+# No core inside: the app installs herdr-core's own release
 # (distribution/core-version is the oldest core this app works with).
+# The app never updates itself; new versions come from the Releases page.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -41,64 +41,49 @@ case "$arch" in
   arm64 | aarch64) arch=aarch64 ;;
   *) echo "package: unsupported CPU $arch" >&2; exit 1 ;;
 esac
-if [[ $os == macos && $arch != aarch64 ]]; then
-  echo "package: Intel Macs aren't supported; build from source instead." >&2
+if [[ $os == linux ]]; then
+  echo "package: only macOS and Windows ship" >&2
   exit 1
 fi
-target="$os-$arch"
+
+root=$(pwd)
+name=$(scripts/brand-plist --const NAME)
+exe=$(scripts/brand-plist --const EXECUTABLE)
+out="$root/dist/apollo-app-$version-$os-$arch.zip"
 
 sha256() { if command -v sha256sum >/dev/null; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi; }
 
-echo "package: herdr-app $version for $target"
+echo "package: $name $version for $os-$arch"
 for notice in LICENSE THIRD-PARTY-NOTICES; do
   [[ -s $notice ]] || { echo "package: $notice is missing or empty" >&2; exit 1; }
 done
-# Only release builds update themselves (src/update.rs).
-HERDR_APP_RELEASE=1 cargo build --release --locked ${triple:+--target "$triple"}
+# APOLLO_RELEASE lets the app check and update herdr-core (src/update.rs).
+APOLLO_RELEASE=1 cargo build --release --locked ${triple:+--target "$triple"}
 
-if [[ $os == linux ]]; then export TMPDIR=${TMPDIR:-/var/tmp}; fi
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 mkdir -p dist
-out="dist/herdr-app-$target.tar.gz"
-if [[ $os == linux || $os == windows ]]; then
-  dir="$work/herdr-app"
+# Both 7z and ditto would add to an existing archive.
+rm -f "$out"
+if [[ $os == windows ]]; then
+  dir="$work/apollo-app"
   mkdir -p "$dir"
-  if [[ $os == windows ]]; then cp "$bin/herdr-app.exe" "$dir/"; else cp "$bin/herdr-app" "$dir/"; fi
-  cp assets/icons/herdr-ui-icon-clean.svg "$dir/herdr-app.svg"
+  cp "$bin/herdr-app.exe" "$dir/apollo-app.exe"
+  cp "$bin/herdr-app.exe" "$dir/herdr-app.exe"
+  cmp "$dir/apollo-app.exe" "$dir/herdr-app.exe"
+  cp assets/icons/apollo.svg "$dir/apollo-app.svg"
   cp LICENSE THIRD-PARTY-NOTICES "$dir/"
-  notices_path=herdr-app/THIRD-PARTY-NOTICES
-  tar -czf "$out" -C "$work" herdr-app
+  cmp "$dir/THIRD-PARTY-NOTICES" THIRD-PARTY-NOTICES
+  (cd "$work" && 7z a -tzip "$out" apollo-app >/dev/null)
 else
-  app="$work/Herdr.app"
+  app="$work/$name.app"
   mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-  cp "$bin/herdr-app" "$app/Contents/MacOS/Herdr"
-  cp assets/icons/Herdr.icns "$app/Contents/Resources/Herdr.icns"
+  cp "$bin/herdr-app" "$app/Contents/MacOS/$exe"
+  cp assets/icons/Apollo.icns "$app/Contents/Resources/Apollo.icns"
   cp LICENSE THIRD-PARTY-NOTICES "$app/Contents/Resources/"
-  notices_path=Herdr.app/Contents/Resources/THIRD-PARTY-NOTICES
-  cat > "$app/Contents/Info.plist" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-    <key>CFBundleExecutable</key><string>Herdr</string>
-    <key>CFBundleIdentifier</key><string>dev.herdr.app</string>
-    <key>CFBundleName</key><string>Herdr</string>
-    <key>CFBundleDisplayName</key><string>Herdr</string>
-    <key>CFBundleIconFile</key><string>Herdr</string>
-    <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>$version</string>
-    <key>CFBundleVersion</key><string>$version</string>
-    <key>NSMicrophoneUsageDescription</key><string>Terminal programs running in Herdr can use the microphone, for example for voice input.</string>
-    <key>NSCameraUsageDescription</key><string>Terminal programs running in Herdr can use the camera.</string>
-    <key>NSAppleEventsUsageDescription</key><string>Terminal programs running in Herdr can use AppleScript to control other apps.</string>
-    <key>NSPrincipalClass</key><string>NSApplication</string>
-    <key>NSHighResolutionCapable</key><true/>
-    <key>LSEnvironment</key><dict/></dict></plist>
-PLIST
+  scripts/brand-plist "$version" > "$app/Contents/Info.plist"
+  cmp "$app/Contents/Resources/THIRD-PARTY-NOTICES" THIRD-PARTY-NOTICES
   scripts/mac-sign "$app"
-  tar -czf "$out" -C "$work" Herdr.app
+  ditto -c -k --sequesterRsrc --keepParent "$app" "$out"
 fi
-tar -xOf "$out" "$notices_path" | cmp - THIRD-PARTY-NOTICES
-license_path="${notices_path%/*}/LICENSE"
-tar -xOf "$out" "$license_path" | cmp - LICENSE
 echo "package: $out ($(sha256 "$out"))"

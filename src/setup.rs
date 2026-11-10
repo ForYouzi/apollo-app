@@ -15,11 +15,8 @@ use gpui::*;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-const ICON: &[u8] = include_bytes!("../assets/icons/herdr-ui-icon-clean.png");
-#[cfg(not(windows))]
-const APP_INSTALL: &str = "curl -fsSL https://releases.herdr.dev/app/install.sh | sh";
-#[cfg(windows)]
-const APP_INSTALL: &str = "powershell -c \"irm https://releases.herdr.dev/app/install.ps1 | iex\"";
+const ICON: &[u8] = include_bytes!("../assets/icons/apollo-ui-icon.png");
+const APP_INSTALL: &str = crate::brand::RELEASES_PAGE;
 #[cfg(not(windows))]
 const CORE_INSTALL: &str = "curl -fsSL https://releases.herdr.dev/core/install.sh | sh";
 #[cfg(windows)]
@@ -76,13 +73,13 @@ pub struct Setup {
 pub fn open(need: Need, requests: async_channel::Receiver<Request>, cx: &mut App) {
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size(px(620.0), px(460.0)), cx))),
-        titlebar: Some(TitlebarOptions { title: Some("Herdr".into()), ..Default::default() }),
-        app_id: Some("herdr-app".into()),
+        titlebar: Some(TitlebarOptions { title: Some(crate::brand::NAME.into()), ..Default::default() }),
+        app_id: Some(crate::brand::APP_ID.into()),
         ..Default::default()
     };
     let icon = Arc::new(Image::from_bytes(ImageFormat::Png, ICON.to_vec()));
     cx.open_window(options, |_, cx| cx.new(|_| Setup { need, state: State::Ready, requests: Some(requests), icon }))
-        .expect("cannot open the Herdr window");
+        .expect(concat!("cannot open the ", crate::brand::name!(), " window"));
     cx.activate(true);
 }
 
@@ -167,29 +164,29 @@ impl Setup {
     fn words(&self) -> (String, String, String) {
         match &self.need {
             Need::Install => (
-                "Herdr needs herdr-core".into(),
-                "herdr-core runs your terminals and agents, and keeps them alive when this window closes. Herdr couldn't find it on this computer.".into(),
+                format!("{} needs herdr-core", crate::brand::NAME),
+                format!("herdr-core runs your terminals and agents, and keeps them alive when this window closes. {} couldn't find it on this computer.", crate::brand::NAME),
                 format!("Install it for me puts it in {CORE_PLACE} (with hc), like its own installer: {CORE_INSTALL}"),
             ),
             Need::Connect(error) => (
-                "Herdr can't connect to herdr-core".into(),
+                format!("{} can't connect to herdr-core", crate::brand::NAME),
                 error.clone(),
                 "Once you've resolved this, try again.".into(),
             ),
             Need::Fix(Mismatch::TooOld { have, need }) => (
-                "Herdr needs a newer herdr-core".into(),
-                format!("Yours is {have}; this Herdr needs {need} or newer. Updating keeps your terminals running."),
+                format!("{} needs a newer herdr-core", crate::brand::NAME),
+                format!("Yours is {have}; this {} needs {need} or newer. Updating keeps your terminals running.", crate::brand::NAME),
                 "Or update it yourself: hc update".into(),
             ),
             Need::Fix(Mismatch::Missing(methods)) => (
-                "Herdr needs a newer herdr-core".into(),
-                format!("Your herdr-core can't do everything this Herdr needs ({}). Updating keeps your terminals running.", methods.join(", ")),
+                format!("{} needs a newer herdr-core", crate::brand::NAME),
+                format!("Your herdr-core can't do everything this {} needs ({}). Updating keeps your terminals running.", crate::brand::NAME, methods.join(", ")),
                 "Or update it yourself: hc update".into(),
             ),
             Need::Fix(Mismatch::Newer { generation }) => (
-                "This Herdr is older than your herdr-core".into(),
-                format!("Your herdr-core speaks a newer protocol (generation {generation}) than this Herdr understands. Update Herdr; your terminals keep running."),
-                format!("Update Herdr: {APP_INSTALL}"),
+                format!("This {} is older than your herdr-core", crate::brand::NAME),
+                format!("Your herdr-core speaks a newer protocol (generation {generation}) than this {0} understands. Update {0}; your terminals keep running.", crate::brand::NAME),
+                format!("Download the new {} from {APP_INSTALL}", crate::brand::NAME),
             ),
         }
     }

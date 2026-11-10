@@ -3,12 +3,21 @@
 use std::io;
 use std::path::Path;
 
+fn bundle_exe(exe: &Path, bundle: &str, name: &str) -> bool {
+    exe.is_absolute() && exe.ends_with(Path::new(bundle).join("Contents/MacOS").join(name))
+}
+
+/// Herdr's app: a link to it from before the rebrand is ours to repoint.
 fn herdr_bundle(exe: &Path) -> bool {
-    exe.is_absolute() && exe.ends_with("Herdr.app/Contents/MacOS/Herdr")
+    bundle_exe(exe, "Herdr.app", "Herdr")
+}
+
+fn apollo_bundle(exe: &Path) -> bool {
+    bundle_exe(exe, crate::brand::BUNDLE, crate::brand::EXECUTABLE)
 }
 
 fn installed_bundle(exe: &Path) -> bool {
-    herdr_bundle(exe)
+    apollo_bundle(exe)
         && !exe.starts_with("/Volumes")
         && !exe.components().any(|c| c.as_os_str() == "AppTranslocation" || c.as_os_str() == "target")
 }
@@ -25,7 +34,7 @@ pub(super) fn ensure(home: &Path, exe: &Path) -> io::Result<()> {
                 return Ok(());
             }
             let resolved = if target.is_absolute() { target } else { link.parent().unwrap().join(target) };
-            if !herdr_bundle(&resolved) {
+            if !(herdr_bundle(&resolved) || apollo_bundle(&resolved)) {
                 return Ok(());
             }
             std::fs::remove_file(&link)?;
@@ -48,7 +57,7 @@ mod tests {
         let home = std::env::temp_dir().join(format!("herdr-cli-link-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(&home).unwrap();
-        let exe = home.join("Applications/Herdr.app/Contents/MacOS/Herdr");
+        let exe = home.join("Applications/Apollo.app/Contents/MacOS/Apollo");
         let link = home.join(".local/bin/herdr-app");
         ensure(&home, &exe).unwrap();
         assert_eq!(std::fs::read_link(&link).unwrap(), exe);
@@ -61,6 +70,7 @@ mod tests {
             "../../Applications/Herdr.app/Contents/MacOS/Herdr".into(),
             "/Volumes/Herdr/Herdr.app/Contents/MacOS/Herdr".into(),
             "/private/var/folders/AppTranslocation/old/d/Herdr.app/Contents/MacOS/Herdr".into(),
+            home.join("old/Apollo.app/Contents/MacOS/Apollo"),
         ] {
             std::fs::remove_file(&link).unwrap();
             symlink(old, &link).unwrap();
@@ -88,11 +98,11 @@ mod tests {
         std::fs::remove_file(&link).unwrap();
 
         for skipped in [
-            "/Volumes/Herdr/Herdr.app/Contents/MacOS/Herdr",
-            "/private/var/folders/AppTranslocation/random/d/Herdr.app/Contents/MacOS/Herdr",
-            "/work/target/debug/Herdr.app/Contents/MacOS/Herdr",
-            "/work/target/debug/herdr-app",
-            "/Applications/Other.app/Contents/MacOS/Herdr",
+            "/Volumes/Apollo/Apollo.app/Contents/MacOS/Apollo",
+            "/private/var/folders/AppTranslocation/r/d/Apollo.app/Contents/MacOS/Apollo",
+            "/work/target/debug/Apollo.app/Contents/MacOS/Apollo",
+            "/Applications/Herdr.app/Contents/MacOS/Herdr",
+            "/Applications/Other.app/Contents/MacOS/Apollo",
         ] {
             ensure(&home, Path::new(skipped)).unwrap();
             assert!(link.symlink_metadata().is_err(), "{skipped}");

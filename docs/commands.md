@@ -148,7 +148,7 @@ Take a terminal's pane away and disable core keep; it keeps running (a sub-agent
 
 ## `terminal.right_click`
 
-Where right-clicks in a terminal (default: the focused one) go when its program takes the mouse: "program" or "menu" (Herdr's, the default). Shift+right-click is always the menu.
+Where right-clicks in a terminal (default: the focused one) go when its program takes the mouse: "program" or "menu" (Apollo's, the default). Shift+right-click is always the menu.
 
 | Argument | Required |
 |---|---|
@@ -157,7 +157,7 @@ Where right-clicks in a terminal (default: the focused one) go when its program 
 
 ## `terminal.pin`
 
-Pin an agent to the top of the agent lists (pinned true) or unpin it (false). Pins are kept with the terminal, so every Herdr client shows them, and end with it.
+Pin an agent to the top of the agent lists (pinned true) or unpin it (false). Pins are kept with the terminal, so every client shows them, and end with it.
 
 | Argument | Required |
 |---|---|
@@ -290,7 +290,7 @@ No arguments.
 
 ## `terminal.scroll`
 
-Scroll a terminal's view of its history (default: the focused one). Give exactly one of: lines (a whole number; negative goes up, toward history), pages (a number, fractions allowed; one page is the terminal's rows), to: "top" (oldest history) or "bottom" (the live screen). This scrolls Herdr's view, not the program.
+Scroll a terminal's view of its history (default: the focused one). Give exactly one of: lines (a whole number; negative goes up, toward history), pages (a number, fractions allowed; one page is the terminal's rows), to: "top" (oldest history) or "bottom" (the live screen). This scrolls Apollo's view, not the program.
 
 | Argument | Required |
 |---|---|
@@ -481,7 +481,7 @@ Open the settings (section: look, alerts, updates).
 
 ## `app.check_updates`
 
-Look for a newer Herdr and herdr-core now.
+Look for a newer herdr-core now. Apollo never updates itself: new versions are on the Releases page.
 
 No arguments.
 
@@ -525,7 +525,7 @@ No arguments.
 
 ## `app.update`
 
-Restart into the update Herdr downloaded (your terminals keep running).
+Restart into a downloaded app update (your terminals keep running). Apollo downloads none: new versions are on the Releases page.
 
 No arguments.
 
@@ -571,4 +571,4 @@ Maximize the window, or back.
 
 No arguments.
 
-[Back to Herdr](../README.md)
+[Back to Apollo](../README.md)

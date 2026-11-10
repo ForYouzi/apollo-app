@@ -2,6 +2,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod bench;
+mod brand;
 mod commands;
 mod control;
 mod core_bin;
@@ -41,8 +42,8 @@ mod window;
 
 use gpui::*;
 
-const HELP: &str = "\
-herdr-app: the Herdr desktop app. With no arguments it opens the window.
+const HELP: &str = concat!("\
+herdr-app: the ", brand::name!(), " desktop app. With no arguments it opens the window.
 
 Usage:
   herdr-app                        open the window
@@ -61,7 +62,7 @@ window closes. `hc --help`: start, read, wait on and talk to terminals and
 agents. The app shows them and arranges them in spaces and tabs.
 
 Home: ~/.config/herdr-app (HERDR_APP_HOME picks another).
-";
+");
 
 /// A Windows window app has no console: answers to `herdr-app ls` and the
 /// like go to the terminal it was started from. Output already piped (agents,
@@ -210,7 +211,7 @@ pub fn open_main(core: std::sync::Arc<hc::Core>, requests: async_channel::Receiv
                 // macOS: always see-through, so a layout can draw its own title bar
                 // live; the app drags the window (window/titlebar.rs).
                 titlebar: Some(TitlebarOptions {
-                    title: Some("Herdr".into()),
+                    title: Some(crate::brand::NAME.into()),
                     // Windows: hidden for good (it can't change live); the app draws it.
                     appears_transparent: cfg!(any(target_os = "macos", windows)),
                     traffic_light_position: cfg!(target_os = "macos").then(|| point(px(12.0), px(7.0))),
@@ -221,10 +222,10 @@ pub fn open_main(core: std::sync::Arc<hc::Core>, requests: async_channel::Receiv
                 // it to 20x20; turning it on later (a "system" layout) is fine.
                 window_decorations: Some(WindowDecorations::Client),
                 // Herdr Dev and other side-by-side builds get their own dock icon.
-                app_id: Some(std::env::var("HERDR_APP_ID").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "herdr-app".into())),
+                app_id: Some(std::env::var("HERDR_APP_ID").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| crate::brand::APP_ID.into())),
                 ..Default::default()
             };
             cx.open_window(options, |window, cx| cx.new(|cx| window::AppWindow::new(core, requests, window, cx)))
-                .expect("cannot open the Herdr window");
+                .expect(concat!("cannot open the ", brand::name!(), " window"));
             cx.activate(true);
 }

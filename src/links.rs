@@ -1,12 +1,23 @@
 //! Links in terminal text: Ghostty's URL and file path pattern, what a match
-//! points to, and handing it to the system to open.
+//! points to, and what clicking it does.
 
 use fancy_regex::Regex;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
-/// Ghostty's default link pattern (`src/config/url.zig`), unchanged.
+mod activation;
+mod system;
+
+pub use activation::{Opener, activate, safe_folder};
+/// What a click on a link means, without carrying it out.
+#[allow(unused_imports)]
+pub use activation::{Activation, activation};
+#[cfg(test)]
+pub(crate) use activation::{Call, Recorder};
+pub use system::SystemOpener;
+
+/// Ghostty's default link pattern (`src/config/url.zig`), plus Windows drive and UNC paths.
 static PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     let schemes = r"https?://|mailto:|ftp://|file:|ssh:|git://|ssh://|tel:|magnet:|ipfs://|ipns://|gemini://|gopher://|news:";
     let ipv6 = r"(?:\[[:0-9a-fA-F]+(?:[:0-9a-fA-F]*)+\](?::[0-9]+)?)";
@@ -20,12 +31,16 @@ static PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     let dotted_spaces = r"(?:(?<!:) (?!\w+:\/\/)(?!\.{0,2}\/)(?!~\/)[\w\-.~:\/?#@!$&*+;=%]*[\/.])*";
     let any_spaces = r"(?:(?<!:) (?!\w+:\/\/)(?!\.{0,2}\/)(?!~\/)[\w\-.~:\/?#@!$&*+;=%]+)*";
     let rooted = r"(?:\.\.\/|\.\/|(?<!\w)~\/|(?:[\w][\w\-.]*\/)*(?<!\w)\$[A-Za-z_]\w*\/|\.[\w][\w\-.]*\/|(?<![\w~\/])\/(?!\/))";
-    let scheme_url = format!("(?:{schemes})(?:{ipv6}|{scheme_chars}+{bracketed})+{no_trailing_punctuation}");
+    // Schemes are case-insensitive (RFC 3986), so `FILE:` and `HTTPS:` match whole.
+    let scheme_url = format!("(?i:{schemes})(?:{ipv6}|{scheme_chars}+{bracketed})+{no_trailing_punctuation}");
     let rooted_path = format!(
         "{rooted}(?:{dotted}{path_chars}+{dotted_spaces}{no_trailing_colon}|{undotted}{path_chars}+{any_spaces}{no_trailing_colon})"
     );
     let bare_path = format!(r"{dotted}(?<!\$\d*)(?<!\w)[\w][\w\-.]*\/{path_chars}+{no_trailing_colon}");
-    Regex::new(&format!("{scheme_url}|{rooted_path}|{bare_path}")).expect("link pattern")
+    // Windows drive (`C:\x`, `C:/x`) and UNC (`\\server\share\x`) paths, which Ghostty lacks.
+    let drive = r"(?<![\w/\\])[A-Za-z]:[\\/][\w\-.~:\\/@!$&+;=%]+(?<![,.:])";
+    let unc = r"(?<![\w\\])\\\\[\w.\-]+\\[\w\-.~:\\@!$&+;=%]+(?<![,.:])";
+    Regex::new(&format!("{scheme_url}|{rooted_path}|{bare_path}|{drive}|{unc}")).expect("link pattern")
 });
 
 /// The link in `text` that covers byte `at`.
@@ -72,9 +87,59 @@ pub enum Target {
     File(PathBuf),
 }
 
+/// The local path a `file:` URL names: percent-decoded, `localhost` or no host;
+/// on Windows `/C:/x` → `C:\x` and other hosts → UNC. `None` if not one.
+pub fn file_url_path(url: &str) -> Option<PathBuf> {
+    decode_file_url(url, cfg!(windows))
+}
+
+fn decode_file_url(url: &str, windows: bool) -> Option<PathBuf> {
+    let rest = url.get(..5).filter(|s| s.eq_ignore_ascii_case("file:")).map(|_| &url[5..])?;
+    let rest = rest.split(['?', '#']).next()?;
+    let (host, path) = match rest.strip_prefix("//") {
+        Some(r) => r.find('/').map_or((r, ""), |i| r.split_at(i)),
+        None => ("", rest),
+    };
+    if !path.starts_with('/') {
+        return None;
+    }
+    let path = String::from_utf8(percent_decode(path)?).ok()?;
+    let local = host.is_empty() || host.eq_ignore_ascii_case("localhost");
+    if !windows {
+        return local.then(|| PathBuf::from(path));
+    }
+    let path = path.replace('/', "\\");
+    if !local {
+        return Some(PathBuf::from(format!(r"\\{host}{path}")));
+    }
+    let b = path.as_bytes();
+    let drive = b.len() >= 3 && b[1].is_ascii_alphabetic() && b[2] == b':';
+    Some(PathBuf::from(if drive { &path[1..] } else { &path[..] }))
+}
+
+fn percent_decode(s: &str) -> Option<Vec<u8>> {
+    let (mut out, b) = (Vec::new(), s.as_bytes());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' {
+            // Exactly two hex digits: `from_str_radix` alone would also take a sign (`%+A`).
+            let hex = b.get(i + 1..i + 3).filter(|h| h.iter().all(u8::is_ascii_hexdigit))?;
+            out.push(u8::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    Some(out)
+}
+
 /// What a link opens. File paths count only when they exist here; relative
-/// ones need the terminal's folder.
+/// ones need the terminal's folder. A `file:` URL always names a file.
 pub fn resolve(link: &str, cwd: Option<&Path>) -> Option<Target> {
+    if link.get(..5).is_some_and(|s| s.eq_ignore_ascii_case("file:")) {
+        return file_url_path(link).map(Target::File);
+    }
     let scheme = link.split_once(':').is_some_and(|(s, _)| {
         s.len() > 1 && s.starts_with(|c: char| c.is_ascii_alphabetic()) && s.chars().all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
     });
@@ -111,58 +176,28 @@ pub fn resolve(link: &str, cwd: Option<&Path>) -> Option<Target> {
     Path::new(bare).exists().then(|| Target::File(PathBuf::from(bare)))
 }
 
-/// Hands the target to the system's default handler.
-pub fn open(target: &Target) {
-    let arg = match target {
-        Target::Url(u) => std::ffi::OsStr::new(u),
-        Target::File(p) => p.as_os_str(),
-    };
-    open_system(arg);
+/// A text match worth showing as a link. In lines joined back together only a
+/// file that exists proves the join right.
+pub fn candidate(link: &str, cwd: Option<&Path>, joined: bool) -> Option<Target> {
+    resolve(link, cwd).filter(|t| !joined || matches!(t, Target::File(p) if p.exists()))
 }
 
-#[cfg(windows)]
-fn open_system(arg: &std::ffi::OsStr) {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::{
-        System::Com::{COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize},
-        UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL},
+/// A `file:` URL for `p` in tests, verbatim prefix dropped (`\\?\C:\x`, `\\?\UNC\s\x`).
+#[cfg(test)]
+pub(crate) fn file_url(p: &Path) -> String {
+    let s = p.to_str().expect("a UTF-8 test path");
+    let s = match (s.strip_prefix(r"\\?\UNC\"), s.strip_prefix(r"\\?\")) {
+        (Some(unc), _) => format!(r"\\{unc}"),
+        (None, Some(local)) => local.to_owned(),
+        (None, None) => s.to_owned(),
     };
-
-    let mut wide: Vec<u16> = arg.encode_wide().collect();
-    if wide.contains(&0) {
-        tracing::warn!("cannot open a link containing a NUL");
-        return;
-    }
-    wide.push(0);
-    // ShellExecuteW can pump messages; never reenter GPUI while it handles a click.
-    std::thread::spawn(move || {
-        let initialized = unsafe { CoInitializeEx(std::ptr::null(), (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32) };
-        // Explorer interprets '=' as its own arguments; the handler gets a literal target.
-        let result = unsafe {
-            ShellExecuteW(std::ptr::null_mut(), std::ptr::null(), wide.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL)
-        } as isize;
-        if result <= 32 {
-            tracing::warn!("cannot open link: ShellExecuteW returned {result}");
-        }
-        if initialized >= 0 {
-            unsafe { CoUninitialize() };
-        }
-    });
-}
-
-#[cfg(not(windows))]
-fn open_system(arg: &std::ffi::OsStr) {
-    let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
-    let spawned = std::process::Command::new(opener)
-        .arg(arg)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
-    match spawned {
-        // Reaped off the UI thread so it never lingers as a zombie.
-        Ok(mut child) => drop(std::thread::spawn(move || child.wait())),
-        Err(e) => tracing::warn!("cannot run {opener}: {e}"),
+    let path = s.replace('\\', "/");
+    if path.starts_with("//") {
+        format!("file:{path}")
+    } else if path.starts_with('/') {
+        format!("file://{path}")
+    } else {
+        format!("file:///{path}")
     }
 }
 
@@ -274,13 +309,87 @@ mod tests {
     }
 
     #[test]
+    fn matches_windows_paths() {
+        for (input, expect) in [
+            (r"see C:\src\main.rs:42:7, ok", r"C:\src\main.rs:42:7"),
+            ("open C:/a/b.txt.", "C:/a/b.txt"),
+            (r"at \\server\share\x.txt, done", r"\\server\share\x.txt"),
+        ] {
+            assert_eq!(first(input), Some(expect), "{input:?}");
+        }
+        assert_eq!(first("modified:   C"), None);
+    }
+
+    #[test]
+    fn test_file_urls_drop_the_verbatim_prefix() {
+        for (path, url) in [
+            (r"\\?\C:\a\b.txt", "file:///C:/a/b.txt"),
+            (r"\\?\UNC\srv\share\d", "file://srv/share/d"),
+            (r"C:\a", "file:///C:/a"),
+            ("/tmp/x", "file:///tmp/x"),
+        ] {
+            assert_eq!(file_url(Path::new(path)), url, "{path}");
+        }
+        assert_eq!(decode_file_url(&file_url(Path::new(r"\\?\C:\a\b.txt")), true), Some(PathBuf::from(r"C:\a\b.txt")));
+        assert_eq!(decode_file_url(&file_url(Path::new(r"\\?\UNC\srv\share\d")), true), Some(PathBuf::from(r"\\srv\share\d")));
+    }
+
+    #[test]
+    fn activation_is_part_of_the_links_api() {
+        let url = Target::Url("https://a.com".into());
+        assert_eq!(crate::links::activation(&url), crate::links::Activation::OpenUrl("https://a.com".into()));
+        assert_eq!(crate::links::activation(&Target::Url("file:///%zz".into())), crate::links::Activation::Ignore);
+    }
+
+    #[test]
+    fn schemes_match_in_any_case() {
+        assert_eq!(first("see FILE:///tmp/report.txt ok"), Some("FILE:///tmp/report.txt"));
+        assert_eq!(first("see HTTPS://Example.com ok"), Some("HTTPS://Example.com"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn resolves_windows_drive_paths() {
+        let exe = r"C:\Windows\System32\notepad.exe";
+        assert_eq!(resolve(&format!("{exe}:3"), None), Some(Target::File(exe.into())));
+        assert_eq!(resolve(r"C:\apollo-missing\x.txt", None), None);
+    }
+
+    #[test]
     fn query_links_keep_their_full_target() {
-        for url in ["https://example.com/?a=1&b=2", "https://localhost:17480/login?t=abc%3D%3D", "file:///C:/Windows/System32/winver.exe"] {
+        for url in ["https://example.com/?a=1&b=2", "https://localhost:17480/login?t=abc%3D%3D"] {
             let text = format!("Dashboard: {url}");
             let range = find(&text, text.find(url).unwrap()).unwrap();
             assert_eq!(&text[range.clone()], url);
             assert_eq!(resolve(&text[range], None), Some(Target::Url(url.into())));
         }
+        let u = "file:///C:/Windows/System32/winver.exe";
+        let text = format!("Dashboard: {u}");
+        let range = find(&text, text.find(u).unwrap()).unwrap();
+        assert_eq!(&text[range.clone()], u);
+        assert_eq!(resolve(u, None), Some(Target::File(file_url_path(u).unwrap())));
+    }
+
+    #[test]
+    fn file_urls_decode_to_paths() {
+        assert_eq!(decode_file_url("file:///tmp/a%20b.txt", false), Some(PathBuf::from("/tmp/a b.txt")));
+        assert_eq!(decode_file_url("file://localhost/tmp/x", false), Some(PathBuf::from("/tmp/x")));
+        assert_eq!(decode_file_url("FILE:/tmp/x#top", false), Some(PathBuf::from("/tmp/x")));
+        assert_eq!(decode_file_url("file:///C:/Users/a%20b/x.txt", true), Some(PathBuf::from(r"C:\Users\a b\x.txt")));
+        assert_eq!(decode_file_url("file://server/share/x", true), Some(PathBuf::from(r"\\server\share\x")));
+        for bad in ["file://server/share/x", "file:///%zz", "file:///%C3%28", "file:relative", "https://a.com", "file:///tmp/%+A"] {
+            assert_eq!(decode_file_url(bad, false), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn file_links_always_resolve_to_files() {
+        let gone = "file:///C:/apollo-missing/x.txt";
+        assert_eq!(resolve(gone, None), Some(Target::File(file_url_path(gone).unwrap())));
+        assert_eq!(resolve("file:///%zz", None), None);
+        assert_eq!(resolve("file:///tmp/%+A", None), None);
+        assert_eq!(candidate("file:///apollo-gone/x", None, true), None);
+        assert!(candidate("file:///apollo-gone/x", None, false).is_some());
     }
 
     #[test]

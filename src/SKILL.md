@@ -1,6 +1,6 @@
 # herdr-app: drive the person's window
 
-Herdr shows spaces, tabs and panes. herdr-core (`hc`) runs their terminals
+Apollo shows spaces, tabs and panes. herdr-core (`hc`) runs their terminals
 and keeps them alive when the window closes. Use `herdr-app` only to change
 what the person sees. For starting, reading, messaging, waiting on or cleaning
 up agents and programs, read `hc --skill` and use hc.
@@ -20,7 +20,8 @@ prints the built-in command list even without an open window. Do not launch bare
 signal or restart the person's app or core. A window closing does not kill
 its terminals.
 
-`app.check_updates` checks for newer releases. Settings reports "Up to date"
+`app.check_updates` checks for a newer herdr-core (Apollo never updates
+itself; new versions are on the Releases page). Settings reports "Up to date"
 only after a successful check; on failure, check the connection and retry.
 
 ## Show something when asked
@@ -89,7 +90,7 @@ with a nonzero code within two seconds, the window shows an error toast with
 the exit code and last output lines.
 
 A terminal started with hc opts into the window with `herdr.space=<id>`.
-`herdr.tab=<id>` chooses its tab; without it, Herdr creates a tab in that space.
+`herdr.tab=<id>` chooses its tab; without it, Apollo creates a tab in that space.
 Unlabeled workers stay hidden. Do not add labels just to run a background
 worker. Use app commands when the
 user wants to see a new tab or split, hc for orchestration that need not change
@@ -107,7 +108,7 @@ those files or the generated guide. The app rewrites them on start.
   They are trusted JavaScript with command and network access.
   `"focusable": true` in `mod.json` lets `pane.go` move onto a copy; it receives
   `"focus"` from `nextCommand()` and focuses its own keyboard handle.
-- Shipped mods belong to Herdr: duplicate with `mod.clone` before editing.
+- Shipped mods belong to Apollo: duplicate with `mod.clone` before editing.
   Shipped layouts likewise use `layout.clone` for a personal copy.
   Discover required arguments with `herdr-app commands`.
 - Save to reload. A broken save keeps the old version running and reports
@@ -144,7 +145,7 @@ capture or permissions. It needs a running window that has drawn a frame;
 
 ## Problems and safety
 
-If Herdr misbehaves, `herdr-app feedback "<what happened>"` drafts a report.
+If Apollo misbehaves, `herdr-app feedback "<what happened>"` drafts a report.
 The person reviews and sends it; it does not silently send feedback.
 
 Never experiment with pointer/key automation on the person's real display.
