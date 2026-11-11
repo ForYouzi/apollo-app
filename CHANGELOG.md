@@ -1,5 +1,14 @@
 # Apollo changelog
 
+## [0.0.3] - 2026-11-11
+
+### New
+- Links and file paths are found the way SonicTerm finds them: paths with spaces or in quotes, `file.rs:12:3` and `file.rs:12-20`, paths inside `Read(…)`, `[label](…)` or `key=…`, and bare file names in the terminal's folder. Relative paths and names link only when the file exists. (#3)
+
+### Fixed
+- `file:` links that hide a `/` (`%2f`) or step up a folder (`..`) no longer open.
+- Links ending in brackets they opened stay whole: `https://a.com/foo(bar)`, `http://[::1]:3000`, `ftp://h/a(b(c)d)`.
+
 ## [0.0.2] - 2026-11-10
 
 ### Fixed
