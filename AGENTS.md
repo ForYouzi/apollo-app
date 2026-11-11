@@ -4,7 +4,11 @@ Apollo is a fork of [herdr-app](https://github.com/herdrdev/herdr-app)
 (Apache-2.0): the Herdr desktop app, a native GPUI client of
 [herdr-core](https://github.com/herdrdev/herdr-core), renamed and with its
 own releases. It lives at
-[ForYouzi/apollo-app](https://github.com/ForYouzi/apollo-app).
+[ForYouzi/apollo-app](https://github.com/ForYouzi/apollo-app), a GitHub
+fork whose `main` builds on herdr-app's history. To take Herdr changes, add
+the `upstream` remote (`git remote add upstream
+https://github.com/herdrdev/herdr-app.git`) and merge `upstream/master` (or a
+release tag) on a branch.
 
 If AGENTS.local.md exists, read it too: the maintainer's local rules.
 
