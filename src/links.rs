@@ -8,6 +8,11 @@ use std::sync::LazyLock;
 
 mod activation;
 mod system;
+// SonicTerm's link scanner, as vendored: some of its API is only for its tests.
+#[allow(dead_code, deprecated)]
+mod url_open;
+#[allow(dead_code, deprecated, unused_imports)]
+mod url_scan;
 
 pub use activation::{Opener, activate, safe_folder};
 /// What a click on a link means, without carrying it out.
