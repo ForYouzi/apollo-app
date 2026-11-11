@@ -24,16 +24,49 @@ pub use system::SystemOpener;
 pub use url_scan::PathStyle;
 use url_scan::DetectedTarget;
 
-/// URL schemes Apollo links besides SonicTerm's (http, https, mailto, file://),
-/// from Ghostty's pattern. Not after a word, `.`, `/`, `-` or `:` (`xftp://`).
-static EXTRA_URL: LazyLock<Regex> = LazyLock::new(|| {
-    let schemes = r"ftp://|ssh://|ssh:|git://|tel:|magnet:|ipfs://|ipns://|gemini://|gopher://|news:|file:";
-    let ipv6 = r"(?:\[[:0-9a-fA-F]+(?:[:0-9a-fA-F]*)+\](?::[0-9]+)?)";
-    let body = r"[\w\-.~:/?#@!$&*+,;=%]";
-    // Ghostty takes only word characters in brackets; Apollo takes the URL's own (`a(b-c)`).
-    let bracketed = r"(?:[\(\[][\w\-.~:/?#@!$&*+,;=%]*[\)\]])?";
-    Regex::new(&format!(r"(?<![\w.\-/:])(?i:{schemes})(?:{ipv6}|{body}+{bracketed})+(?<![,.])")).expect("extra url pattern")
-});
+/// URL schemes Apollo links besides SonicTerm's (http, https, mailto, file://), from Ghostty's pattern.
+const EXTRA_SCHEMES: [&str; 12] = ["ftp://", "ssh://", "ssh:", "git://", "tel:", "magnet:", "ipfs://", "ipns://", "gemini://", "gopher://", "news:", "file:"];
+
+/// Apollo's other-scheme URLs in `text`: not after a word, `.`, `/`, `-` or `:`
+/// (`xftp://`); Ghostty's URL characters, with brackets the URL opened and
+/// closed (`a(b(c)d)`, `[::1]`); no final `,` or `.`.
+fn extra_urls(text: &str) -> Vec<Range<usize>> {
+    let body = |c: char| c.is_alphanumeric() || "_-.~:/?#@!$&*+,;=%".contains(c);
+    let mut out = Vec::new();
+    let mut from = 0;
+    while from < text.len() {
+        let start = from;
+        from += text[from..].chars().next().map_or(1, char::len_utf8);
+        let Some(scheme) = EXTRA_SCHEMES.iter().find(|s| text.get(start..start + s.len()).is_some_and(|t| t.eq_ignore_ascii_case(s))) else {
+            continue;
+        };
+        if text[..start].chars().next_back().is_some_and(|c| c.is_alphanumeric() || "_./-:".contains(c)) {
+            continue;
+        }
+        let (mut end, mut open) = (start + scheme.len(), Vec::new());
+        let mut last = end;
+        for (i, c) in text[end..].char_indices() {
+            match c {
+                '(' | '[' => open.push(c),
+                ')' | ']' if open.last() == Some(&if c == ')' { '(' } else { '[' }) => {
+                    open.pop();
+                }
+                c if body(c) => {}
+                _ => break,
+            }
+            end = start + scheme.len() + i + c.len_utf8();
+            if open.is_empty() {
+                last = end;
+            }
+        }
+        let end = text[..last].trim_end_matches([',', '.']).len();
+        if end > start + scheme.len() {
+            out.push(start..end);
+            from = end;
+        }
+    }
+    out
+}
 
 /// `$NAME/…`, which SonicTerm doesn't link: Ghostty's form, a variable first.
 static VAR_PATH: LazyLock<Regex> =
@@ -119,18 +152,11 @@ fn first_existing(found: Vec<url_scan::TargetMatch>, ctx: &Ctx) -> Option<(Range
         .find_map(|m| typed(&m.target, ctx).map(|path| (m.start..m.end, path)))
 }
 
-/// Every URL in `text`: SonicTerm's, then Apollo's other schemes where SonicTerm
-/// found none. A closing `)` or `]` SonicTerm dropped comes back when the URL
-/// opened one (`foo(bar)`, `[::1]`).
+/// Every URL in `text`: SonicTerm's and Apollo's other schemes. A closing `)` or
+/// `]` SonicTerm dropped comes back when the URL opened one (`foo(bar)`, `[::1]`).
 fn url_spans(text: &str) -> Vec<Range<usize>> {
-    let mut spans: Vec<Range<usize>> = url_scan::find_urls(text).into_iter().map(|m| m.start..m.end).collect();
-    let sonic = spans.clone();
-    for m in EXTRA_URL.find_iter(text).flatten() {
-        if !sonic.iter().any(|s| m.start() < s.end && s.start < m.end()) {
-            spans.push(m.range());
-        }
-    }
-    for span in &mut spans {
+    let mut sonic: Vec<Range<usize>> = url_scan::find_urls(text).into_iter().map(|m| m.start..m.end).collect();
+    for span in &mut sonic {
         let b = text.as_bytes();
         loop {
             let (open, close) = match b.get(span.end) {
@@ -145,15 +171,26 @@ fn url_spans(text: &str) -> Vec<Range<usize>> {
             span.end += 1;
         }
     }
-    spans.sort_by_key(|s| s.start);
+    // Where two overlap, the one starting first wins (`ftp://a/?next=(https://b)`).
+    let mut all: Vec<Range<usize>> = sonic.into_iter().chain(extra_urls(text)).collect();
+    all.sort_by_key(|s| (s.start, std::cmp::Reverse(s.end)));
+    let mut spans: Vec<Range<usize>> = Vec::new();
+    for span in all {
+        if spans.last().is_none_or(|kept| kept.end <= span.start) {
+            spans.push(span);
+        }
+    }
     spans
 }
 
-/// Whether a `file:` URL's path has a `.` or `..` part, percent-encoded or not.
+/// Whether a `file:` URL's path has a part of only dots (`.`, `..`, `%2e`),
+/// counting one that a sentence's punctuation follows (`..,`).
 fn dot_segment(url: &str) -> bool {
     url.split(['?', '#']).next().unwrap_or(url).split(['/', '\\']).any(|part| {
         let part = percent_decode(part).unwrap_or_else(|| part.as_bytes().to_vec());
-        part == b"." || part == b".."
+        let part = part.trim_ascii_end();
+        let end = part.iter().rposition(|b| !b",;:!?".contains(b)).map_or(0, |i| i + 1);
+        end > 0 && part[..end].iter().all(|&b| b == b'.')
     })
 }
 
@@ -775,9 +812,9 @@ mod tests {
         let f = Fixture::new("dots", &["tmp/x"]);
         let root = f.root.to_str().unwrap().replace('\\', "/");
         let root = root.trim_start_matches('/');
-        for tail in ["..", "%2e.", "%2E%2E", ".", "./x"] {
-            let text = format!("see file:///{root}/tmp/{tail} ok");
-            for at in 4..text.len() - 3 {
+        for tail in ["..", "%2e.", "%2E%2E", ".", "./x", "..,", "..;", "../x,"] {
+            let text = format!("see file:///{root}/tmp/{tail} then continue");
+            for at in 4..text.find(" then").unwrap() {
                 assert_eq!(f.pick(&text, at), None, "{text} at {at}");
             }
             assert_eq!(file_url_path(&format!("file:///{root}/tmp/{tail}")), None, "{tail}");
@@ -791,13 +828,26 @@ mod tests {
     #[test]
     fn other_schemes_keep_their_brackets() {
         let f = Fixture::new("extra-brackets", &[]);
-        for url in ["ftp://example.com/a(b-c)", "ssh://h/x[1.2]", "gemini://a.org/p(q)r", "ftp://h/a(b)c(d)"] {
+        for url in [
+            "ftp://example.com/a(b-c)",
+            "ssh://h/x[1.2]",
+            "gemini://a.org/p(q)r",
+            "ftp://h/a(b)c(d)",
+            "ftp://example.com/a(b)(c)",
+            "ftp://example.com/a(b(c)d)",
+            "ftp://example.com/?next=(https://example.org)",
+            "ssh://[::1]:22/x",
+        ] {
             let text = format!("see {url} ok");
             for at in 4..4 + url.len() {
                 assert_eq!(f.pick(&text, at), Some((4..4 + url.len(), Picked::Link(Target::Url(url.into())))), "{url} at {at}");
             }
         }
         assert_eq!(f.pick("(ftp://a.com)", 1).map(|(r, _)| r), Some(1..12));
+        assert_eq!(f.pick("see ftp://a.com/x(y ok", 4).map(|(r, _)| r), Some(4..17), "an unclosed bracket isn't the URL's");
+        // A URL inside another's query belongs to the outer one; on its own it links itself.
+        let text = "see https://a.com/?u=ftp://b.com ok";
+        assert_eq!(f.pick(text, text.find("ftp").unwrap()).map(|(r, _)| &text[r]), Some("https://a.com/?u=ftp://b.com"));
     }
 
     #[test]
