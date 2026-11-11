@@ -12,7 +12,10 @@ If AGENTS.local.md exists, read it too: the maintainer's local rules.
 
 The brand (name, bundle id, icon, executable) lives in `src/brand.rs`;
 `scripts/brand-plist` renders the macOS Info.plist from
-`packaging/Info.plist.in`. Internal herdr names stay on purpose: the
+`packaging/Info.plist.in`. The macOS icon is `assets/icons/Apollo.icon` (Icon
+Composer), compiled into the committed `assets/icons/Assets.car` by
+`scripts/mac-icon`; its Dark look keeps the yellow. Rerun the script after
+editing the icon. Internal herdr names stay on purpose: the
 `herdr-app` command, the settings home `~/.config/herdr-app`, herdr-core,
 and the `HERDR_*` environment variables, so Apollo shares a Herdr setup.
 

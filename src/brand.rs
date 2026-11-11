@@ -95,6 +95,25 @@ mod tests {
         }
     }
 
+    /// With macOS's Dark icon style, an icon without its own dark look is darkened to black.
+    /// `Apollo.icon` keeps the yellow in Dark; `scripts/mac-icon` compiles it into `Assets.car`,
+    /// which the bundle names by `CFBundleIconName` (`Apollo.icns` stays for older macOS).
+    #[test]
+    fn mac_icon_stays_yellow_in_dark() {
+        let icon: serde_json::Value = serde_json::from_str(include_str!("../assets/icons/Apollo.icon/icon.json")).unwrap();
+        let fills = icon["fill-specializations"].as_array().unwrap();
+        let fill = |appearance: Option<&str>| fills.iter().find(|f| f["appearance"].as_str() == appearance).map(|f| &f["value"]);
+        let light = fill(None).expect("no default fill");
+        assert_eq!(light["linear-gradient"][0], "srgb:0.98431,0.78824,0.29020,1.00000", "not apollo.svg's #fbc94a");
+        assert_eq!(fill(Some("dark")), Some(light), "Dark must keep the yellow fill");
+        assert!(include_bytes!("../assets/icons/Assets.car").starts_with(b"BOMStore"));
+        let plist = include_str!("../packaging/Info.plist.in");
+        assert!(plist.contains("<key>CFBundleIconName</key><string>Apollo</string>") && plist.contains("<key>CFBundleIconFile</key><string>Apollo</string>"));
+        for (script, src) in [("package", include_str!("../scripts/package")), ("install-macos", include_str!("../scripts/install-macos"))] {
+            assert!(src.contains("cp assets/icons/Assets.car \"$app/Contents/Resources/Assets.car\""), "{script} doesn't ship Assets.car");
+        }
+    }
+
     /// The window's app id (Wayland app_id, X11 WM_CLASS) is `APP_ID`: the launcher entry
     /// must be named after it and claim it, or the window shows up as a separate, iconless app.
     #[test]

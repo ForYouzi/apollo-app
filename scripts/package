@@ -80,6 +80,7 @@ else
   mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
   cp "$bin/herdr-app" "$app/Contents/MacOS/$exe"
   cp assets/icons/Apollo.icns "$app/Contents/Resources/Apollo.icns"
+  cp assets/icons/Assets.car "$app/Contents/Resources/Assets.car"
   cp LICENSE THIRD-PARTY-NOTICES "$app/Contents/Resources/"
   scripts/brand-plist "$version" > "$app/Contents/Info.plist"
   cmp "$app/Contents/Resources/THIRD-PARTY-NOTICES" THIRD-PARTY-NOTICES

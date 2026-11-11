@@ -1,0 +1,14 @@
+#!/bin/bash
+# Compiles assets/icons/Apollo.icon (Icon Composer) into assets/icons/Assets.car, which the
+# macOS bundle ships next to Apollo.icns. Rerun after editing Apollo.icon; needs Xcode 26+.
+# Committed so packaging needs no Xcode.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+: "${DEVELOPER_DIR:=/Applications/Xcode.app/Contents/Developer}"
+export DEVELOPER_DIR
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+xcrun actool assets/icons/Apollo.icon --compile "$work" --platform macosx --minimum-deployment-target 11.0 \
+  --app-icon Apollo --output-partial-info-plist "$work/partial.plist" >/dev/null
+cp "$work/Assets.car" assets/icons/Assets.car
+echo "mac-icon: assets/icons/Assets.car"

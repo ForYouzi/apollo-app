@@ -46,6 +46,8 @@ jobs:
         run: |
           x=$(mktemp -d); ditto -x -k dist/apollo-app-*-macos-*.zip "$x"; a="$x/Apollo.app"
           test "$(plutil -extract CFBundleIdentifier raw "$a/Contents/Info.plist")" = com.foryouzi.apollo
+          test "$(plutil -extract CFBundleIconName raw "$a/Contents/Info.plist")" = Apollo
+          cmp assets/icons/Assets.car "$a/Contents/Resources/Assets.car"
           test "$(lipo -archs "$a/Contents/MacOS/Apollo")" = "${{ matrix.arch }}"
           codesign -v "$a"
           HERDR_APP_HOME="$x/home" "$a/Contents/MacOS/Apollo" --version | grep -qx "herdr-app $(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"

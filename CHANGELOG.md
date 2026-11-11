@@ -1,5 +1,10 @@
 # Apollo changelog
 
+## [0.0.2] - 2026-11-10
+
+### Fixed
+- On macOS, the Dark icon style no longer turns the Apollo icon black: it stays yellow. (#2)
+
 ## [0.0.1] - 2026-11-10
 
 ### New
