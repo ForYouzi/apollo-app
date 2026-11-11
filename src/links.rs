@@ -31,7 +31,10 @@ const EXTRA_SCHEMES: [&str; 12] = ["ftp://", "ssh://", "ssh:", "git://", "tel:",
 /// (`xftp://`); Ghostty's URL characters, with brackets the URL opened and
 /// closed (`a(b(c)d)`, `[::1]`); no final `,` or `.`.
 fn extra_urls(text: &str) -> Vec<Range<usize>> {
-    let body = |c: char| c.is_alphanumeric() || "_-.~:/?#@!$&*+,;=%".contains(c);
+    // `\w` exactly as Ghostty's pattern means it (combining marks included: `cafe\u{301}`).
+    static WORD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\w$").expect("word pattern"));
+    let word = |c: char| WORD.is_match(c.encode_utf8(&mut [0; 4])).unwrap_or(false);
+    let body = |c: char| word(c) || "-.~:/?#@!$&*+,;=%".contains(c);
     let mut out = Vec::new();
     let mut from = 0;
     while from < text.len() {
@@ -40,7 +43,7 @@ fn extra_urls(text: &str) -> Vec<Range<usize>> {
         let Some(scheme) = EXTRA_SCHEMES.iter().find(|s| text.get(start..start + s.len()).is_some_and(|t| t.eq_ignore_ascii_case(s))) else {
             continue;
         };
-        if text[..start].chars().next_back().is_some_and(|c| c.is_alphanumeric() || "_./-:".contains(c)) {
+        if text[..start].chars().next_back().is_some_and(|c| word(c) || "./-:".contains(c)) {
             continue;
         }
         let (mut end, mut open) = (start + scheme.len(), Vec::new());
@@ -183,14 +186,13 @@ fn url_spans(text: &str) -> Vec<Range<usize>> {
     spans
 }
 
-/// Whether a `file:` URL's path has a part of only dots (`.`, `..`, `%2e`),
-/// counting one that a sentence's punctuation follows (`..,`).
+/// Whether a `file:` URL's path has a `.` or `..` part (RFC 3986's dot
+/// segments), percent-encoded or not, once a sentence's `,;:!?` is off its end.
 fn dot_segment(url: &str) -> bool {
-    url.split(['?', '#']).next().unwrap_or(url).split(['/', '\\']).any(|part| {
+    let path = url.split(['?', '#']).next().unwrap_or(url).trim_end_matches([',', ';', ':', '!', '?']);
+    path.split(['/', '\\']).any(|part| {
         let part = percent_decode(part).unwrap_or_else(|| part.as_bytes().to_vec());
-        let part = part.trim_ascii_end();
-        let end = part.iter().rposition(|b| !b",;:!?".contains(b)).map_or(0, |i| i + 1);
-        end > 0 && part[..end].iter().all(|&b| b == b'.')
+        part == b"." || part == b".."
     })
 }
 
@@ -819,6 +821,12 @@ mod tests {
             }
             assert_eq!(file_url_path(&format!("file:///{root}/tmp/{tail}")), None, "{tail}");
         }
+        // A name of three dots is a name, not a step up.
+        f.add("tmp/.../x");
+        let text = format!("see file:///{root}/tmp/.../x ok");
+        let Some((_, Picked::Link(Target::File(p)))) = f.pick(&text, 4) else { panic!("{text}") };
+        assert!(p.ends_with("tmp/.../x"), "{p:?}");
+        assert!(file_url_path(&format!("file:///{root}/tmp/.../x")).is_some());
         // A trailing period ends the sentence, not the path.
         let text = format!("see file:///{root}/tmp/x. ok");
         let Some((_, Picked::Link(Target::File(p)))) = f.pick(&text, 4) else { panic!("{text}") };
@@ -837,13 +845,17 @@ mod tests {
             "ftp://example.com/a(b(c)d)",
             "ftp://example.com/?next=(https://example.org)",
             "ssh://[::1]:22/x",
+            "ftp://a.com/cafe\u{301}.txt",
         ] {
             let text = format!("see {url} ok");
-            for at in 4..4 + url.len() {
+            for at in (4..4 + url.len()).filter(|&at| text.is_char_boundary(at)) {
                 assert_eq!(f.pick(&text, at), Some((4..4 + url.len(), Picked::Link(Target::Url(url.into())))), "{url} at {at}");
             }
         }
         assert_eq!(f.pick("(ftp://a.com)", 1).map(|(r, _)| r), Some(1..12));
+        // Decomposed Unicode (macOS file names) stays in the link, `file:` included.
+        let text = "see file:/tmp/cafe\u{301}.txt ok";
+        assert_eq!(f.pick(text, 4).map(|(r, _)| &text[r]), Some("file:/tmp/cafe\u{301}.txt"));
         assert_eq!(f.pick("see ftp://a.com/x(y ok", 4).map(|(r, _)| r), Some(4..17), "an unclosed bracket isn't the URL's");
         // A URL inside another's query belongs to the outer one; on its own it links itself.
         let text = "see https://a.com/?u=ftp://b.com ok";
