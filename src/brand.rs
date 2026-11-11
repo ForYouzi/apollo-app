@@ -149,17 +149,18 @@ mod tests {
         assert!(readme.contains("`apollo-app.exe` opens the app") && readme.contains("gives you the `herdr-app` command"), "README's Windows install text");
     }
 
-    /// On a tag, nothing builds before ci passed on the commit; a workflow_dispatch dry run
-    /// (where `ci-passed` is skipped) still builds.
+    /// Only a pushed version tag runs a release (nothing by hand, like SonicTerm), and
+    /// nothing builds or publishes before the tag is on main and ci passed on its commit.
     #[test]
-    fn release_builds_wait_for_ci_on_tags() {
+    fn release_runs_only_on_tags_after_ci() {
         let release = include_str!("../.github/workflows/release.yml").replace("\r\n", "\n");
-        let build = &release[release.find("\n  build:\n").unwrap()..];
-        let build = &build[..build.find("\n    strategy:").unwrap() + 1];
-        assert!(build.contains("\n    needs: [validate, ci-passed]\n"), "{build}");
-        let gate = "\n    if: ${{ !cancelled() && needs.validate.result == 'success' && (needs.ci-passed.result == 'success' || needs.ci-passed.result == 'skipped') }}\n";
-        assert!(build.contains(gate), "{build}");
-        assert!(release.contains("  publish:\n    needs: [build, ci-passed]\n    if: github.event_name == 'push' && github.ref_type == 'tag'\n"));
+        assert!(release.contains("\non:\n  push:\n    tags: [\"v[0-9]+.[0-9]+.[0-9]+*\"]\npermissions:"), "release.yml must run only on version tags");
+        assert!(!release.contains("workflow_dispatch"), "release.yml must not run by hand");
+        assert!(release.contains("git merge-base --is-ancestor \"$GITHUB_SHA^{commit}\" refs/remotes/origin/main"), "release.yml must check the tag is on main");
+        assert!(release.contains("\n  build:\n    needs: [validate, ci-passed]\n"), "builds must wait for ci");
+        assert!(release.contains("\n  publish:\n    needs: [build, ci-passed]\n"), "publishing must wait for ci");
+        assert!(!release.contains("needs.ci-passed.result == 'skipped'"), "ci-passed must never be skipped");
+        assert!(release.contains("[[ \"$GITHUB_REF_NAME\" == *-* ]] && kind=--prerelease"), "a tag with a '-' is a prerelease");
     }
 
     #[test]
