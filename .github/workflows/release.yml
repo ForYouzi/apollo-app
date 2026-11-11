@@ -1,4 +1,5 @@
 # Tag v<version> (matching Cargo.toml) on a main commit whose ci passed: publishes 3 zips + SHA256SUMS; workflow_dispatch is a dry run.
+# GitHub registers a fork's workflow only once a push changes its file.
 name: release
 on:
   push: { tags: ["v*.*.*"] }
