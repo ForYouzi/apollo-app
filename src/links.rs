@@ -296,10 +296,11 @@ pub fn spans(text: &str, at: usize, style: PathStyle) -> Vec<Range<usize>> {
     out
 }
 
-/// The narrowest link covering byte `at`, without checking that files exist.
+/// The narrowest link covering byte `at`, without checking that files exist,
+/// read as POSIX text on every OS (for tests of where links show).
 #[cfg(test)]
 pub fn find(text: &str, at: usize) -> Option<Range<usize>> {
-    spans(text, at, PathStyle::native()).into_iter().next()
+    spans(text, at, PathStyle::Posix).into_iter().next()
 }
 
 /// The address-shaped word under the pointer, excluding surrounding punctuation.
@@ -822,11 +823,14 @@ mod tests {
             assert_eq!(file_url_path(&format!("file:///{root}/tmp/{tail}")), None, "{tail}");
         }
         // A name of three dots is a name, not a step up.
-        f.add("tmp/.../x");
-        let text = format!("see file:///{root}/tmp/.../x ok");
-        let Some((_, Picked::Link(Target::File(p)))) = f.pick(&text, 4) else { panic!("{text}") };
-        assert!(p.ends_with("tmp/.../x"), "{p:?}");
-        assert!(file_url_path(&format!("file:///{root}/tmp/.../x")).is_some());
+        assert!(decode_file_url("file:///tmp/.../x", false).is_some());
+        #[cfg(unix)] // Windows can't make one.
+        {
+            f.add("tmp/.../x");
+            let text = format!("see file:///{root}/tmp/.../x ok");
+            let Some((_, Picked::Link(Target::File(p)))) = f.pick(&text, 4) else { panic!("{text}") };
+            assert!(p.ends_with("tmp/.../x"), "{p:?}");
+        }
         // A trailing period ends the sentence, not the path.
         let text = format!("see file:///{root}/tmp/x. ok");
         let Some((_, Picked::Link(Target::File(p)))) = f.pick(&text, 4) else { panic!("{text}") };
