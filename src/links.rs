@@ -30,7 +30,8 @@ static EXTRA_URL: LazyLock<Regex> = LazyLock::new(|| {
     let schemes = r"ftp://|ssh://|ssh:|git://|tel:|magnet:|ipfs://|ipns://|gemini://|gopher://|news:|file:";
     let ipv6 = r"(?:\[[:0-9a-fA-F]+(?:[:0-9a-fA-F]*)+\](?::[0-9]+)?)";
     let body = r"[\w\-.~:/?#@!$&*+,;=%]";
-    let bracketed = r"(?:[\(\[]\w*[\)\]])?";
+    // Ghostty takes only word characters in brackets; Apollo takes the URL's own (`a(b-c)`).
+    let bracketed = r"(?:[\(\[][\w\-.~:/?#@!$&*+,;=%]*[\)\]])?";
     Regex::new(&format!(r"(?<![\w.\-/:])(?i:{schemes})(?:{ipv6}|{body}+{bracketed})+(?<![,.])")).expect("extra url pattern")
 });
 
@@ -49,11 +50,13 @@ pub struct Ctx {
     pub cwd: Option<PathBuf>,
     pub home: Option<PathBuf>,
     pub style: PathStyle,
+    /// Environment variables for `$NAME/…` paths.
+    pub env: fn(&str) -> Option<std::ffi::OsString>,
 }
 
 impl Ctx {
     pub fn new(cwd: Option<PathBuf>) -> Self {
-        Self { cwd, home: std::env::home_dir(), style: PathStyle::native() }
+        Self { cwd, home: std::env::home_dir(), style: PathStyle::native(), env: |name| std::env::var_os(name) }
     }
 }
 
@@ -82,6 +85,11 @@ pub fn pick(
     // A URL owns its whole span, closing brackets included, even when it leads nowhere.
     if let Some(range) = url_spans(text).into_iter().find(|r| r.contains(&at)) {
         let target = url_target(&text[range.clone()])?;
+        // A `file:` URL's trimmed tail counts: `file:///tmp/..` must not open `/tmp/`.
+        let tail = text[range.end..].find(|c: char| c.is_whitespace() || "\"'`)]}>".contains(c)).map_or(text.len(), |i| range.end + i);
+        if matches!(target, Target::File(_)) && dot_segment(&text[range.start..tail]) {
+            return None;
+        }
         if joined && !matches!(&target, Target::File(p) if p.exists()) {
             return None;
         }
@@ -141,6 +149,14 @@ fn url_spans(text: &str) -> Vec<Range<usize>> {
     spans
 }
 
+/// Whether a `file:` URL's path has a `.` or `..` part, percent-encoded or not.
+fn dot_segment(url: &str) -> bool {
+    url.split(['?', '#']).next().unwrap_or(url).split(['/', '\\']).any(|part| {
+        let part = percent_decode(part).unwrap_or_else(|| part.as_bytes().to_vec());
+        part == b"." || part == b".."
+    })
+}
+
 /// What a URL opens: a `file:` URL names a file (`None` if it can't), others open as they are.
 fn url_target(url: &str) -> Option<Target> {
     if url.get(..5).is_some_and(|s| s.eq_ignore_ascii_case("file:")) {
@@ -198,8 +214,10 @@ impl Fallback {
             let base = match name {
                 "PWD" => ctx.cwd.clone()?,
                 "HOME" => ctx.home.clone()?,
-                _ => PathBuf::from(std::env::var_os(name)?),
+                _ => PathBuf::from((ctx.env)(name)?),
             };
+            // A relative variable (`DIR=src`) is relative to the terminal's folder.
+            let base = if base.is_absolute() { base } else { ctx.cwd.as_ref()?.join(base) };
             Some(base.join(rest)).filter(|p| p.exists())
         };
         expand(text).or_else(|| expand(bare))
@@ -277,7 +295,7 @@ pub enum Target {
 
 /// The local path a `file:` URL names: percent-decoded, `localhost` or no host;
 /// on Windows `/C:/x` → `C:\x` and other hosts → UNC. `None` if not one, or if
-/// it hides a separator (`%2f`, `%5c`) or steps up a folder (`..`).
+/// it hides a separator (`%2f`, `%5c`) or has a `.` or `..` part.
 pub fn file_url_path(url: &str) -> Option<PathBuf> {
     decode_file_url(url, cfg!(windows))
 }
@@ -296,10 +314,10 @@ fn decode_file_url(url: &str, windows: bool) -> Option<PathBuf> {
     if lower.contains("%2f") || lower.contains("%5c") {
         return None;
     }
-    let path = String::from_utf8(percent_decode(path)?).ok()?;
-    if path.split(['/', '\\']).any(|part| part == "..") {
+    if dot_segment(path) {
         return None;
     }
+    let path = String::from_utf8(percent_decode(path)?).ok()?;
     let local = host.is_empty() || host.eq_ignore_ascii_case("localhost");
     if !windows {
         return local.then(|| PathBuf::from(path));
@@ -408,7 +426,7 @@ mod tests {
             let _ = std::fs::remove_dir_all(&root);
             let cwd = root.join("w/x");
             std::fs::create_dir_all(&cwd).unwrap();
-            let ctx = Ctx { cwd: Some(cwd), home: Some(root.join("home")), style: PathStyle::Posix };
+            let ctx = Ctx { cwd: Some(cwd), home: Some(root.join("home")), style: PathStyle::Posix, env: |name| (name == "DIR").then(|| "src".into()) };
             let f = Fixture { root, ctx };
             for file in files {
                 f.add(file);
@@ -750,6 +768,45 @@ mod tests {
             let end = text[start..].find(' ').unwrap() + start;
             assert_eq!(f.pick(text, start).map(|(r, _)| r), Some(start..end), "{text}");
         }
+    }
+
+    #[test]
+    fn file_urls_trimmed_by_the_scanner_still_count_their_dots() {
+        let f = Fixture::new("dots", &["tmp/x"]);
+        let root = f.root.to_str().unwrap().replace('\\', "/");
+        let root = root.trim_start_matches('/');
+        for tail in ["..", "%2e.", "%2E%2E", ".", "./x"] {
+            let text = format!("see file:///{root}/tmp/{tail} ok");
+            for at in 4..text.len() - 3 {
+                assert_eq!(f.pick(&text, at), None, "{text} at {at}");
+            }
+            assert_eq!(file_url_path(&format!("file:///{root}/tmp/{tail}")), None, "{tail}");
+        }
+        // A trailing period ends the sentence, not the path.
+        let text = format!("see file:///{root}/tmp/x. ok");
+        let Some((_, Picked::Link(Target::File(p)))) = f.pick(&text, 4) else { panic!("{text}") };
+        assert!(p.ends_with("tmp/x"), "{p:?}");
+    }
+
+    #[test]
+    fn other_schemes_keep_their_brackets() {
+        let f = Fixture::new("extra-brackets", &[]);
+        for url in ["ftp://example.com/a(b-c)", "ssh://h/x[1.2]", "gemini://a.org/p(q)r", "ftp://h/a(b)c(d)"] {
+            let text = format!("see {url} ok");
+            for at in 4..4 + url.len() {
+                assert_eq!(f.pick(&text, at), Some((4..4 + url.len(), Picked::Link(Target::Url(url.into())))), "{url} at {at}");
+            }
+        }
+        assert_eq!(f.pick("(ftp://a.com)", 1).map(|(r, _)| r), Some(1..12));
+    }
+
+    #[test]
+    fn relative_variables_resolve_from_the_terminals_folder() {
+        let f = Fixture::new("vars", &["src/main.rs"]);
+        // `DIR` is `src` in the fixture's environment.
+        assert_eq!(f.pick("$DIR/main.rs", 0), Some((0..12, Picked::Link(Target::File(f.at("src/main.rs"))))));
+        assert_eq!(f.pick("$DIR/gone.rs", 0), None);
+        assert_eq!(f.pick("$NOPE/main.rs", 0), None);
     }
 
     /// SonicTerm reads Windows paths with its Windows grammar on every OS; Apollo

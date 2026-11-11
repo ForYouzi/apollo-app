@@ -2513,6 +2513,35 @@ mod tests {
     }
 
     #[test]
+    fn picked_joins_take_the_longest_path_that_exists() {
+        // As `joined_lines_prefer_the_longest_link`, through `links::pick` with the files in place.
+        let dir = scratch("longest", &["sers/me/ab/Workspace/o/x.rs"]);
+        let pick = picking(&dir);
+        let mut vt = Vt::new(15, 4);
+        vt.write(b"  ./sers/me/ab\r\n  /Workspace/o\r\n  /x.rs end");
+        for (col, row) in [(4, 0), (4, 1), (3, 2)] {
+            assert_eq!(vt.link_at(col, row, &pick).unwrap().target, "./sers/me/ab/Workspace/o/x.rs", "({col}, {row})");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn picked_rows_join_only_at_the_edge() {
+        // As `only_rows_reaching_the_edge_join`, through `links::pick` with the files in place.
+        let dir = scratch("edge", &["src/vt.rs", "tmp/ab/cd/x.png"]);
+        let pick = picking(&dir);
+        // A folder an agent lists, its files below: `vt.rs` alone isn't here.
+        let mut vt = Vt::new(30, 4);
+        vt.write(b"src/\r\n  vt.rs");
+        assert_eq!(vt.link_at(3, 1, &pick), None);
+        // A blank line ends what a program broke.
+        let mut vt = Vt::new(10, 4);
+        vt.write(b"see tmp/ab\r\n\r\n/cd/x.png");
+        assert_eq!(vt.link_at(6, 0, &pick).unwrap().target, "tmp/ab");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn marked_links_win_over_picked_text() {
         let dir = scratch("osc8", &["src/a.rs"]);
         let mut vt = Vt::new(40, 2);
