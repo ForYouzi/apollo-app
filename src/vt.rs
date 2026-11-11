@@ -2411,13 +2411,12 @@ mod tests {
         let url = crate::links::file_url(&file);
         let mut vt = Vt::new(url.len() as u16, 3);
         vt.write(format!("{url}\r\nand more").as_bytes());
-        let find = |text: &str, at: usize, joined: bool| {
-            let range = crate::links::find(text, at)?;
-            crate::links::candidate(&text[range.clone()], None, joined).map(|_| range)
-        };
+        let ctx = crate::links::Ctx::new(None);
+        let find = |text: &str, at: usize, joined: bool| crate::links::pick(text, at, joined, &ctx, |_| None).map(|(r, _)| r);
         assert_eq!(vt.link_at(3, 0, find).unwrap().target, url);
         let rec = crate::links::Recorder::default();
-        crate::links::activate(&crate::links::candidate(&url, None, false).unwrap(), &rec);
+        let Some((_, crate::links::Picked::Link(target))) = crate::links::pick(&url, 0, false, &ctx, |_| None) else { panic!() };
+        crate::links::activate(&target, &rec);
         assert_eq!(rec.calls.take(), vec![crate::links::Call::Reveal(file)]);
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -2455,6 +2454,72 @@ mod tests {
         let mut calls = 0;
         assert_eq!(vt.link_at(6, 1, |_: &str, _, _| { calls += 1; None }), None);
         assert_eq!(calls, 1);
+    }
+
+    /// What the app does: `links::pick` from `dir`.
+    fn picking(dir: &std::path::Path) -> impl Fn(&str, usize, bool) -> Option<std::ops::Range<usize>> + use<> {
+        let ctx = crate::links::Ctx::new(Some(dir.to_path_buf()));
+        move |text: &str, at: usize, joined: bool| crate::links::pick(text, at, joined, &ctx, |_| None).map(|(r, _)| r)
+    }
+
+    fn scratch(name: &str, files: &[&str]) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("apollo-vt-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for f in files {
+            let p = dir.join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, "").unwrap();
+        }
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn picked_paths_follow_wrapped_and_scrolled_rows() {
+        let dir = scratch("wrap", &["src/links/url_scan.rs"]);
+        let pick = picking(&dir);
+        // Wrapped by the terminal, the first row scrolled away.
+        let mut vt = Vt::new(8, 2);
+        vt.write(b"see src/links/url_scan.rs:12 ok");
+        let hit = vt.link_at(2, 1, &pick).unwrap();
+        assert_eq!(hit.target, "src/links/url_scan.rs:12");
+        // A Unicode prefix keeps the span on the path's cells.
+        let mut vt = Vt::new(40, 2);
+        vt.write("é src/links/url_scan.rs ok".as_bytes());
+        let hit = vt.link_at(4, 0, &pick).unwrap();
+        assert_eq!(hit.target, "src/links/url_scan.rs");
+        assert_eq!(hit.spans, vec![(0, 2, 22)]);
+        assert_eq!(vt.link_at(0, 0, &pick), None);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn picked_joins_need_a_file_that_exists() {
+        let dir = scratch("join", &["abc/defg/x.png"]);
+        let pick = picking(&dir);
+        // Broken by the program: joined, the whole path exists.
+        let mut vt2 = Vt::new(12, 4);
+        vt2.write(b"  see abc/de\r\n  fg/x.png ok");
+        for (col, row) in [(8, 0), (3, 1)] {
+            assert_eq!(vt2.link_at(col, row, &pick).unwrap().target, "abc/defg/x.png");
+        }
+        // Nothing exists for the join: neither row links.
+        let empty = scratch("join-empty", &[]);
+        let none = picking(&empty);
+        assert_eq!(vt2.link_at(8, 0, &none), None);
+        assert_eq!(vt2.link_at(3, 1, &none), None);
+        std::fs::remove_dir_all(dir).unwrap();
+        std::fs::remove_dir_all(empty).unwrap();
+    }
+
+    #[test]
+    fn marked_links_win_over_picked_text() {
+        let dir = scratch("osc8", &["src/a.rs"]);
+        let mut vt = Vt::new(40, 2);
+        vt.write(b"see \x1b]8;;https://herdr.dev\x1b\\src/a.rs\x1b]8;;\x1b\\ now");
+        let hit = vt.link_at(6, 0, picking(&dir)).unwrap();
+        assert_eq!(hit.target, "https://herdr.dev");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     fn found(text: &str, at: usize, _: bool) -> Option<std::ops::Range<usize>> {

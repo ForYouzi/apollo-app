@@ -52,6 +52,13 @@
       ]
     },
     {
+      "name": "SonicTerm link scanner (src/links/url_scan*.rs, url_open.rs)",
+      "source": "https://github.com/D0n9X1n/SonicTerm/tree/07b5c1f665e2b2af74eda1a3116c1cda23d24f8a",
+      "files": [
+        "licenses/SonicTerm.txt"
+      ]
+    },
+    {
       "name": "QuickJS / quickjs-ng (embedded by quickjs-jit-sys)",
       "source": "https://github.com/longbridge/quickjs-jit/tree/96593cd7a54440ac060a391b8baea7e9a3cf1393/sys/quickjs",
       "files": [

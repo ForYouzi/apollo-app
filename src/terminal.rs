@@ -893,19 +893,13 @@ impl TerminalView {
         let (x, y) = local(&g, pos);
         let (col, row) = (x / f32::from(g.cell.width), y / f32::from(g.cell.height));
         let mut target = None;
+        let ctx = links::Ctx::new(self.cwd.clone());
         let hit = g.vt.link_at(col as u16, row as u16, |text, at, joined| {
-            if let Some(range) = links::find(text, at)
-                && let Some(link) = links::candidate(&text[range.clone()], self.cwd.as_deref(), joined)
-            {
-                target = Some(LinkTarget::External(link));
-                return Some(range);
-            }
-            if joined {
-                return None;
-            }
-            let range = links::word(text, at)?;
-            let address = crate::mods::terminal_address(&text[range.clone()], &self.address)?;
-            target = Some(LinkTarget::Terminal(address));
+            let (range, picked) = links::pick(text, at, joined, &ctx, |w| crate::mods::terminal_address(w, &self.address))?;
+            target = Some(match picked {
+                links::Picked::Link(link) => LinkTarget::External(link),
+                links::Picked::Terminal(address) => LinkTarget::Terminal(address),
+            });
             Some(range)
         })?;
         // OSC 8 links bypass text detection.
