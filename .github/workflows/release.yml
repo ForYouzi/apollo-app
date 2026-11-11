@@ -1,9 +1,11 @@
-# Tag v<version> (matching Cargo.toml) on a main commit whose ci passed: publishes 3 zips + SHA256SUMS; workflow_dispatch is a dry run.
+# Like SonicTerm: only a pushed tag v<x.y.z>[-pre] (matching Cargo.toml) on a
+# main commit whose ci passed releases: 3 zips + SHA256SUMS. A tag with a "-"
+# is a prerelease. Nothing runs this by hand, so nothing can publish off a tag.
 # GitHub registers a fork's workflow only once a push changes its file.
 name: release
 on:
-  push: { tags: ["v*.*.*"] }
-  workflow_dispatch:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
 permissions: { contents: read }
 concurrency: { group: "release-${{ github.ref }}", cancel-in-progress: false }
 env: { RUST_TOOLCHAIN: 1.95.0, ZIG_VERSION: 0.16.0 }
@@ -12,16 +14,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: { persist-credentials: false }
+        with: { persist-credentials: false, fetch-depth: 0 }
       - name: Tag matches Cargo.toml
-        if: github.ref_type == 'tag'
         run: test "${GITHUB_REF_NAME#v}" = "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+      - name: Tagged commit is on main
+        run: |
+          git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
+          git merge-base --is-ancestor "$GITHUB_SHA^{commit}" refs/remotes/origin/main
       - name: No Herdr release switch (no telemetry, no self-update)
         run: "! grep -rn 'HERDR_APP_''RELEASE[=:]' scripts .github"
-  # On a tag, waits for ci-passed; on workflow_dispatch that job is skipped and the dry run builds.
   build:
     needs: [validate, ci-passed]
-    if: ${{ !cancelled() && needs.validate.result == 'success' && (needs.ci-passed.result == 'success' || needs.ci-passed.result == 'skipped') }}
     strategy:
       fail-fast: false
       matrix:
@@ -64,7 +67,6 @@ jobs:
   # whose ci passed. This waits for that push run on the tagged SHA.
   # A newer push cancels it: rerun it and this job carries on.
   ci-passed:
-    if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions: { actions: read }
@@ -85,7 +87,6 @@ jobs:
           done
   publish:
     needs: [build, ci-passed]
-    if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions: { contents: write }
     steps:
@@ -93,4 +94,6 @@ jobs:
         with: { path: dist, merge-multiple: true }
       - run: cd dist && sha256sum apollo-app-*.zip > SHA256SUMS && cat SHA256SUMS && test "$(wc -l < SHA256SUMS)" -eq 3
       - env: { GH_TOKEN: "${{ github.token }}" }
-        run: gh release create "$GITHUB_REF_NAME" dist/apollo-app-*.zip dist/SHA256SUMS --repo "$GITHUB_REPOSITORY" --verify-tag --title "Apollo ${GITHUB_REF_NAME#v}" --notes "Apollo ${GITHUB_REF_NAME#v}. macOS builds are ad-hoc signed; see README for first launch."
+        run: |
+          kind=--latest; [[ "$GITHUB_REF_NAME" == *-* ]] && kind=--prerelease
+          gh release create "$GITHUB_REF_NAME" dist/apollo-app-*.zip dist/SHA256SUMS --repo "$GITHUB_REPOSITORY" --verify-tag "$kind" --title "Apollo ${GITHUB_REF_NAME#v}" --notes "Apollo ${GITHUB_REF_NAME#v}. macOS builds are ad-hoc signed; see README for first launch."

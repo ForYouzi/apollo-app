@@ -110,6 +110,8 @@ Commit messages: lowercase conventional commits (`feat:`, `fix:`, `ci:`,
 Bump `version` in Cargo.toml, add its `## [x.y.z] - YYYY-MM-DD` section
 (`### New` / `### Fixed`) at the top of CHANGELOG.md (a test checks the top
 entry matches Cargo.toml; Apollo shows it as What's New), then push the tag
-`v<version>`. `.github/workflows/release.yml` builds zips for macOS Apple
-silicon, macOS Intel and Windows, and publishes them with `SHA256SUMS` to the
-GitHub release. Running the workflow by hand is a dry run.
+`v<version>` on a `main` commit whose ci passed. Only that tag push runs
+`.github/workflows/release.yml`: it checks the tag matches Cargo.toml and is
+on `main`, waits for that commit's ci, builds zips for macOS Apple silicon,
+macOS Intel and Windows, and publishes them with `SHA256SUMS` to the GitHub
+release (a tag with a `-`, like `v0.0.3-rc.1`, is a prerelease).
