@@ -161,6 +161,9 @@ the highlighted line shows where it will land.
   Ctrl-click (Cmd-click on macOS) a live terminal address in terminal text to
   peek at it. Bare addresses refer to the machine of the terminal showing them;
   use `machine/address` for another machine. Names and non-live addresses aren't links.
+  A URL opens; a file path that exists (absolute, `~/`, relative or a bare name
+  in the terminal's folder, `path:12:3`) shows the file in its folder. A live
+  address wins over a file of the same name.
 - **Agent navigation order** belongs to the mods. A mod displaying agents calls
   `setAgentOrder(list.map(a => a.address))` on render so `agent.next` /
   `agent.prev` follow its list.
