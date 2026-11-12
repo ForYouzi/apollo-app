@@ -1,5 +1,14 @@
 # Apollo changelog
 
+## [0.0.4] - 2026-11-12
+
+### New
+- **Takes Herdr 0.1.15 and its later changes** (entries below for 0.1.15): a full macOS menu bar (File, Edit, View, Window, Help; Cmd+M minimizes), terminal line height and scroll speed in Settings > Look, Select All, copy on select can be turned off, layouts can blur the desktop behind the window, file and folder paths can be dragged into terminals, and oh-my-pi, goose and Cursor's agent CLI are built-in programs.
+- **A URL a program breaks across rows opens whole** when brackets close it on a later row: `(https://…` broken at the pane edge, and a markdown link in Claude Code's numbered diff or markdown view, even with a `+`/`-` sign repeated. Hovering any of its rows shows the whole address. (#6)
+
+### Fixed
+- A wrapped URL that can't be proven whole no longer opens a cut-off address from its first row.
+
 ## [0.0.3] - 2026-11-11
 
 ### New
