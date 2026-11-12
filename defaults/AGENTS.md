@@ -165,7 +165,8 @@ the highlighted line shows where it will land.
   use `machine/address` for another machine. Names and non-live addresses aren't links.
   A URL opens; a file path that exists (absolute, `~/`, relative or a bare name
   in the terminal's folder, `path:12:3`) shows the file in its folder. A live
-  address wins over a file of the same name.
+  address wins over a file of the same name. A URL a program broke across rows
+  links whole once its `(…)` or `[…]` closes on a later row.
 - **Agent navigation order** belongs to the mods. A mod displaying agents calls
   `setAgentOrder(list.map(a => a.address))` on render so `agent.next` /
   `agent.prev` follow its list.

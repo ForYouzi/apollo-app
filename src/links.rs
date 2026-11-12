@@ -282,6 +282,7 @@ fn fallbacks(text: &str, at: usize) -> Vec<(Range<usize>, Fallback)> {
 
 /// Every link span covering byte `at`, without checking that files exist: URLs,
 /// then SonicTerm's paths (shortest first), then the fallbacks.
+#[cfg(test)]
 pub fn spans(text: &str, at: usize, style: PathStyle) -> Vec<Range<usize>> {
     if !text.is_char_boundary(at) || at >= text.len() {
         return Vec::new();
@@ -294,6 +295,13 @@ pub fn spans(text: &str, at: usize, style: PathStyle) -> Vec<Range<usize>> {
         url_scan::target_candidates_at_char_col_for_style(text, col, style, false).into_iter().rev().map(|m| m.start..m.end).collect();
     out.extend(fallbacks(text, at).into_iter().map(|(r, _)| r));
     out
+}
+
+/// Whether `text` is exactly one URL SonicTerm's scanner finds, with one `://`:
+/// what a join of rows a program broke must spell to count as one link.
+pub fn whole_url(text: &str) -> bool {
+    let found = url_scan::find_urls(text);
+    found.len() == 1 && found[0].start == 0 && found[0].url == text && text.matches("://").count() == 1
 }
 
 /// The narrowest link covering byte `at`, without checking that files exist,
