@@ -207,8 +207,8 @@ fn hardwrap_opener_must_be_plain() {
         let vt = hard(30, 10, &[format!("x {opener}https://example.com/aaaaaaa"), "  bbbb)".into()]);
         assert_ne!(at(&vt, 1, 3).as_deref(), Some("https://example.com/aaaaaaabbbb"), "{opener:?}");
     }
-    let vt = hard(30, 10, &["x (https://example.com/aaaaaaaaa".into(), "  bbbb)".into()]);
-    assert_eq!(at(&vt, 1, 3).as_deref(), Some("https://example.com/aaaaaaaaabbbb"), "the plain fixture joins");
+    let vt = hard(30, 10, &["x (https://example.com/aaaaaaa".into(), "  bbbb)".into()]);
+    assert_eq!(at(&vt, 1, 3).as_deref(), Some("https://example.com/aaaaaaabbbb"), "the plain fixture joins");
 }
 
 #[test]
