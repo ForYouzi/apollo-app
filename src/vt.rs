@@ -1079,6 +1079,22 @@ impl Vt {
         if spots[at].uri.is_some() {
             return hit;
         }
+        // A URL a program broke across rows, proven by the wrapper around it.
+        match hardwrap::link(self, hovered, col, top) {
+            hardwrap::Joined::Whole(parts) => {
+                let (mut text, mut spots) = (String::new(), Vec::new());
+                for (y, cells) in parts {
+                    for c in cells {
+                        spots.push(Spot { y, x: c.x, width: c.width, byte: text.len(), uri: None });
+                        text.push(c.ch);
+                    }
+                }
+                let at = spots.iter().position(|s| s.y == hovered && s.x <= col && col < s.x + s.width)?;
+                return self.link_in(&text, &spots, top, at, &mut find, false);
+            }
+            hardwrap::Joined::Unproven => return None,
+            hardwrap::Joined::None => {}
+        }
 
         // Lines a program broke itself, joined: only across rows that reach
         // the right edge, and only where the hovered word runs into one.
@@ -1802,6 +1818,8 @@ impl Drop for Vt {
         }
     }
 }
+
+mod hardwrap;
 
 #[cfg(test)]
 mod tests {
