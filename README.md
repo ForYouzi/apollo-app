@@ -29,7 +29,7 @@ Apollo installs [herdr-core](https://github.com/herdrdev/herdr-core) when it is 
 
 Cmd+click (macOS) or Ctrl+click (Windows) on a file path in terminal text shows the file selected in its folder (Finder or Explorer) instead of opening it.
 
-Links are found the way [SonicTerm](https://github.com/D0n9X1n/SonicTerm) finds them: URLs (`http`, `https`, `mailto`, `file`, plus `ftp`, `ssh`, `git`, `tel` and others), and paths that exist: absolute, `~/`, `./`, relative and bare names (in the terminal's folder), `$HOME/…`, Windows drive and `\\server\share` paths, paths with spaces or in quotes, `file.rs:12:3` and `file.rs:12-20`, and paths inside `Read(…)`, `[label](…)` or `key=…`.
+Links are found the way [SonicTerm](https://github.com/D0n9X1n/SonicTerm) finds them: URLs (`http`, `https`, `mailto`, `file`, plus `ftp`, `ssh`, `git`, `tel` and others), and paths that exist: absolute, `~/`, `./`, relative and bare names (in the terminal's folder), `$HOME/…`, Windows drive and `\\server\share` paths, paths with spaces or in quotes, `file.rs:12:3` and `file.rs:12-20`, and paths inside `Read(…)`, `[label](…)` or `key=…`. A URL a program breaks across rows still opens whole when brackets close it: `(https://…` / `…)`, and a markdown link in Claude Code's numbered diff or markdown view.
 
 ## Find your work
 
