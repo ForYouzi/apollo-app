@@ -58,6 +58,16 @@ test("an unnamed tab's row reads its terminal's title, not the tab number", () =
   expect(title({ name: "3", named: false }, { ...claude, title: "claude" })).toBe("3");
 });
 
+test("a title that is a folder never replaces the tab's name", () => {
+  const title = new Function("View", "localStorage", "props", "run", `${source}; return title;`)(class {}, {}, () => ({}), () => {});
+  const claude = { program: { name: "claude", key: "claude" }, title: "Herdr session names" };
+  expect(title({ name: "3", named: false }, { ...claude, title: "~/src/api" })).toBe("3");
+  expect(title({ name: "3", named: false }, { ...claude, title: "/tmp" })).toBe("3");
+  expect(title({ name: "3", named: false }, { ...claude, title: "\u2733 ~/src/api" })).toBe("3");
+  expect(title({ name: "3", named: false }, { ...claude, title: "C:\\src\\api" })).toBe("3");
+  expect(title({ name: "3", named: false }, { ...claude, title: "\u2733 Herdr session names" })).toBe("Herdr session names");
+});
+
 test("tab labels prefer the first agent, then focused terminal, then first terminal", () => {
   const leadPanes = new Function("View", `${source}; return leadPanes;`)(class {});
   const pane = (tab: string, terminal: string, agent = false, focused = false) => ({ tab, terminal, program: { agent }, focused });
@@ -93,6 +103,35 @@ function element() {
 function textOf(node: any): string {
   return typeof node === "string" ? node : (node?.children ?? []).map(textOf).join(" ");
 }
+
+test("a failed agent check keeps cached launchable agents and shows an error instead of missing agents", async () => {
+  const menuSource = (await readFile(new URL("../defaults/mods/new-menu/main.js", import.meta.url), "utf8"))
+    .replace(/^import .*;\n/gm, "").replace("export default class NewMenu", "class NewMenu");
+  const cached = [
+    { key: "claude", name: "Claude Code", run: ["claude"], installed: true },
+    { key: "codex", name: "Codex", run: ["codex"], installed: false },
+  ];
+  for (const agents of [[], cached]) {
+    const writes: unknown[] = [];
+    const globals = {
+      View: class {}, spaces: () => [], shared: () => ({ "": agents }), setShared: (...args: unknown[]) => writes.push(args),
+      knownAgents: async () => { throw Error("shell failed"); },
+      theme: () => ({}), props: () => ({}), keys: () => [], window: () => ({ platform: "macos" }), panes: () => [],
+      div: element, svg: element, image: element, h_flex: element, v_flex: element,
+    };
+    const NewMenu = new Function(...Object.keys(globals), `${menuSource}; return NewMenu;`)(...Object.values(globals));
+    const menu = new NewMenu();
+    let task: Promise<void>;
+    menu.init({}, { focus_handle: () => ({ focus() {} }), spawn: (run: (cx: unknown) => Promise<void>) => { task = run({ notify() {} }); } });
+    await task!;
+    const text = textOf(menu.render().node);
+    expect(text).toContain("Could not check installed agents");
+    expect(text).not.toContain("not installed");
+    expect(text).not.toContain("Codex");
+    if (agents.length) expect(text).toContain("Claude Code");
+    expect(writes).toEqual([]);
+  }
+});
 
 for (const sort of ["priority", "grouped"]) test(`${sort} render reads panes once and refreshes labels on the next render`, () => {
   const list = Array.from({ length: 64 }, (_, i) => ({
@@ -211,4 +250,26 @@ for (const sort of ["priority", "grouped"]) test(`${sort}: a kept sub-agent keep
   expect(pinned.texts.get("ag-t1")).toContain("t1");
   expect(pinned.texts.get("ag-t3")).toContain("t3");
   expect(keptRender(sort, { kept: [{ address: "t3", parent: "t9" }] }).ids).toContain("ag-t3"); // its parent ended
+});
+
+test("a title that opens with a bracket keeps it; each agent's own prefix still goes", () => {
+  const title = new Function("View", "localStorage", "props", "run", `${source}; return title;`)(class {}, {}, () => ({}), () => {});
+  const clean = new Function("View", "localStorage", "props", "run", `${source}; return clean;`)(class {}, {}, () => ({}), () => {});
+  const claude = { program: { name: "claude", key: "claude" }, title: "" };
+  // The reported bug: a Claude Code session renamed "[herdr] config" showed as "herdr] config".
+  expect(title({ name: "3", named: false }, { ...claude, title: "[herdr] config" })).toBe("[herdr] config");
+  // Titles as each agent writes them (from its source).
+  const titles: [string, string][] = [
+    ["[herdr] config", "[herdr] config"], // Claude Code: the session name
+    ["⠋ [herdr] config | herdr-app", "[herdr] config | herdr-app"], // Codex working
+    ["[ ! ] Action Required | [herdr] config | herdr-app", "Action Required | [herdr] config | herdr-app"], // Codex needs you
+    ["[ . ] Action Required | [herdr] config | herdr-app", "Action Required | [herdr] config | herdr-app"], // ... its other blink phase
+    ["● [ ! ] Action Required | herdr-app", "Action Required | herdr-app"], // ... with the microphone on
+    ["✦  [herdr] config (herdr-app)", "[herdr] config (herdr-app)"], // Gemini working
+    ["◇  Ready (herdr-app)", "Ready (herdr-app)"], // Gemini idle
+    ["OC | [herdr] config", "OC | [herdr] config"], // OpenCode
+    ["π - [herdr] config - herdr-app", "π - [herdr] config - herdr-app"], // Pi
+    ["⠋ - Thinking - [herdr] config - grok", "Thinking - [herdr] config - grok"], // Grok: the spinner's " - " goes too
+  ];
+  for (const [raw, shown] of titles) expect(clean(raw)).toBe(shown);
 });

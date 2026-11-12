@@ -155,7 +155,9 @@ the highlighted line shows where it will land.
   looking (it becomes `idle` once they look). A space's and a tab's
   status is the most urgent of its agents: blocked > done > working > idle.
 - **Sub-agents** are terminals an agent started with `hc run`: the core
-  records the starter as `parent` (see `terminals()`). They belong to their
+  records the starter as `parent` (see `terminals()`). Parent addresses use
+  the app's machine names, or a bare ID for this computer, when they can be
+  mapped; otherwise they stay as the core reported them. They belong to their
   parent's tab without a pane; the `agents` mod shows them,
   `terminal.peek` opens one, `terminal.keep` gives one a pane.
   Ctrl-click (Cmd-click on macOS) a live terminal address in terminal text to
@@ -262,6 +264,11 @@ Properties any node can have:
   Windows), the bar draws them with `window.minimize`, `window.maximize`, `window.close`.
   Windows' shipped tab bar and system strip use vector window icons, with a
   restore icon when maximized, rather than font glyphs.
+- Root only: `"window_blur": true` blurs what's behind the window where the
+  system can (macOS, Windows, some Wayland compositors). Colors with alpha
+  then show the desktop through frosted glass: make `background` and
+  `canvas` transparent and give the sidebar a translucent `chrome`
+  (`"#0b102466"`). Nodes with solid colors stay solid.
 - Root only: `"preview": "layouts/<name>.svg"` (or png): the picture the
   settings screen shows for this layout. Draw one when you make a layout;
   without it the person sees a plain frame. New layouts and `themes/*.json`
@@ -270,6 +277,13 @@ Properties any node can have:
   right-clicks (including Shift+right-click). Omit it for the shipped `menu`;
   an unknown mod logs a warning and falls back to `menu`. Clone a shipped
   layout before changing this field. Other menus are unchanged.
+- Root only: `"toast": "my-toast"` chooses the mod that shows notifications
+  (Apollo's own and every `notify()`), in place of the shipped `toast`; an
+  unknown mod logs a warning and falls back to `toast`. It gets the same
+  `props()`: `{title, body, level, icon, action, timeout, overlay}` (`timeout`
+  is optional). A mod that hands them to the system instead
+  (`exec("notify-send", ...)`) closes itself at once
+  with `closeOverlay(props().overlay)`.
 - Colors are theme names (`border`, `accent`, `surface`, ...) or `#rrggbb[aa]`.
 
 A personal terminal menu replaces the whole menu; it doesn't merge items.
@@ -327,6 +341,10 @@ layout's look and a block can differ:
   are upgraded to readable terminal colors; edited theme files are kept.
   A theme named like a layout (`themes/win98.json`) is
   that layout's own: Settings offers it only there.
+- `terminal_line_height`: row height multiplier (default 1, clamped to 0.8..2).
+  Text stays centred; joining characters, cursors and images follow the rows.
+- `terminal_scroll_speed`: wheel and trackpad multiplier (default 1, clamped
+  to 0.1..5), including mouse reports to programs. Small moves accumulate.
 - `font` / `font_size`: the terminals' (px at zoom 1); `ui_font`: the mods'
   (their text sizes are their own, in px, and follow zoom). Optional: without
   them a layout uses settings.json's, else Apollo's (JetBrains Mono 14, Geist).
@@ -368,7 +386,8 @@ The tab block says how each pane of the shown tab is wrapped:
   buttons run pane commands with that pane (`pane.split`, `pane.zoom`,
   `pane.close`). `position`: `top` or `bottom`; `reveal: "hover"` shows it
   only while the pointer is on the pane, drawn over the terminal so the
-  terminal never resizes. The shipped `pane` mod is an example header.
+  terminal never resizes. The shipped `pane` mod keeps its divider on the
+  terminal-facing edge and reads the frame position from `layout()`.
 - `lone: true` frames a tab's only pane too (default: only when split).
 - Each layout has its own, so one can stay bare while another makes
   every pane a card.
@@ -520,6 +539,8 @@ shortcuts must then be added by hand.
 - On macOS, shifted punctuation shortcuts accept both spellings from the
   current layout: `cmd-shift-]` and `cmd-}` match the same US-layout keypress.
   Existing `keys.json` files don't need to change.
+- The macOS menu bar runs the same commands and shows the key that keys.json
+  binds to each (string actions only). Rebinding updates the menus live.
 - Terminal keys honor the program's negotiated Kitty mode, including on Windows.
 - Windows terminal Escape stays separate from the following key.
 - Search: `ctrl-shift-f` (Cmd-F on macOS) opens a find bar inside the focused terminal;
@@ -539,7 +560,7 @@ Target IDs (`id`, `pane`, `space`, `terminal`) must be strings. Other non-null
 types are rejected before a current-target default applies; null means omitted.
 The main ones:
 
-- Spaces: `space.new {name?, folder?, tab?, argv?, task?, machine?}`
+- Spaces: `space.new {name?, folder?, tab?, argv?, task?, machine?, focus?}`
   (machine: another machine from `hc machine ls`; omitted: the focused space's
   machine for keys and clicks, this computer for scripts; `""`: this computer.
   The space lives there, its
@@ -548,18 +569,22 @@ The main ones:
   `space.close {id?, confirmed?}`, `space.rename {id?, name}` ("": Apollo's name again),
   `space.move {id, index}`, `space.select {index | id}`, `space.next`, `space.prev`.
   With no `argv`, the target core chooses that machine's default shell (PowerShell 7 when available on Windows).
-- Tabs: `tab.new {name?, space?, folder?, argv?, task?}` (argv: an
+- Tabs: `tab.new {name?, space?, folder?, argv?, task?, focus?}` (argv: an
   agent to run, task: its first message). Agents run in your interactive
   shell (including fish), which stays open after the agent exits. A terminal
   that exits with a nonzero code within two seconds of launch shows an error
   toast with its exit code and last output lines. Or `tab.new {name?, space?, mod,
-  props?}` for a tab whose only pane is a mod (a file, a board; split a shell
+  props?, focus?}` for a tab whose only pane is a mod (a file, a board; split a shell
   in beside it like any tab), `tab.close {id?, confirmed?}` (closing the last tab
   closes its space and asks first unless confirmed),
   `tab.rename {id?, name}` ("": its number again), `tab.move {id, index}`,
   `tab.select {index | id}`, `tab.next`, `tab.prev`,
   `tab.settle {id?}`, `tab.unsettle {id?}` (index, next and prev
   skip settled tabs).
+- New spaces and tabs are shown at once. `focus: false` on `space.new` or
+  `tab.new` keeps the shown space and the target space's selected tab (with no
+  space shown, the new space is shown), for work the person looks at later;
+  such tabs go last in their space, in the order made. `focus` is a boolean.
 - Panes: `pane.split {direction: "right" | "down", pane?, argv? | mod?, props?}` (a new
   terminal, or a mod pane), `pane.close {pane?}`,
   `pane.zoom {pane?}`, `pane.focus {pane | terminal}`, `pane.go {direction}`,
@@ -583,7 +608,9 @@ The main ones:
   `terminal.keep {terminal, place?}`, `terminal.park {terminal}`,
   `terminal.peek {terminal}` (peek over the tab, with keep-as-tab and close),
   `terminal.show {terminal?, pane?}`, `terminal.search` (screen and scrollback;
-  find bar state stays with that terminal), `terminal.copy`, `terminal.paste` (copied
+  find bar state stays with that terminal), `terminal.select_all {terminal?}` (selects the whole
+  screen and scrollback for copying; only the alternate screen in vim and similar apps;
+  Cmd+A on macOS, no default on Linux/Windows), `terminal.copy`, `terminal.paste` (copied
   files, such as Finder's or a clipboard manager's image, as if dropped; an image
   alone as `terminal.paste_image` pastes it), `terminal.paste_image` (Ctrl+V: an
   image, into a terminal on another machine: copied there, its path pasted; on
@@ -623,7 +650,14 @@ The main ones:
   Add machine lists all named ssh-config hosts in a scrollable list. Machines
   that need a password, a new host key or herdr-core installed show what to run
   in your own terminal; the picker updates once it is added. Other machines are
-  added quietly. If a remote machine was rebuilt
+  added quietly. If a Linux server reports that programs stop at logout, its
+  added card warns that agents stop when you disconnect and offers the administrator's
+  `sudo loginctl enable-linger -- <user>` command with Copy. A warning mark in
+  Settings > Machines and the sidebar opens that card; it clears automatically
+  after the administrator enables lingering. Older cores show no warning.
+  Login guidance includes Copy. A machine that needs a login shows
+  `hc machine login <name>` with Copy in Settings > Machines, its sidebar group,
+  the welcome screen and the failed New space toast. If a remote machine was rebuilt
   or replaced and a different core answers there, its sidebar offers Connect:
   explicitly forget the old identity and pair again with the same name and target.
   Other unreachable machines don't offer this.
@@ -666,6 +700,9 @@ What's about the user, never a look:
 - `core`: the herdr-core binary to use, when it isn't where Apollo looks
   (PATH, the login shell's PATH, `~/.local/bin`, Homebrew, mise, Nix,
   cargo). Read at start.
+- `terminal_line_height` (default 1, 0.8..2) and `terminal_scroll_speed`
+  (default 1, 0.1..5): terminal row height and wheel/trackpad speed, used
+  where the layout leaves them unset.
 - `font`, `font_size`, `ui_font`: used where the layout doesn't set its
   own. Apollo (main) leaves these unset. Bigger panels: `zoom`.
 - `font_ligatures`: programming ligatures are off by default; set `true` to
@@ -682,6 +719,9 @@ What's about the user, never a look:
   waiting, the next launch installs it before opening a window. The first
   start after an app update also updates herdr-core
   to the latest release of the same generation, keeping terminals running.
+  Package-managed cores stay with their package manager; Settings shows available releases.
+  A core update error can be dismissed with its × or `overlay.close {id:"core-update-error"}`
+  until the error changes or the update recovers.
   Settings → Updates keeps app and core actions together;
   its What's new button opens the waiting update's release range, or this
   version's notes, in the What's new window. Reading never clears the waiting-update dot.
@@ -732,6 +772,10 @@ What's about the user, never a look:
   `p` writes Linux primary selection. `s` is ignored; cut buffers `0`–`7`
   are treated as the system clipboard.
   Clipboard reads (`?`) are never allowed.
+- `copy_on_select`: copy a mouse selection to the clipboard on release (default
+  `true`), and to PRIMARY on Linux. Set `false` to leave both untouched while
+  keeping the selection visible; `terminal.copy` (Cmd+C/Ctrl+Shift+C) still
+  copies it. Hold Shift while dragging in programs that capture the mouse.
 - `pane_scrollbars`: `false` hides the scroll position thumb at a terminal
   pane's right edge (default `true`). It shows only when the pane has
   scrollback — never on the alternate screen (editors, pagers) — and
@@ -756,7 +800,7 @@ from one table, so every mod shows the same, and the app's own toasts
 else the program the terminal runs (an interpreter shows what it runs:
 `node .../vite` is Vite, `npx vitest` is Vitest); shells are `shell`,
 anything unlisted is `program` with a color of its own. The built-in table
-has 120 programs (agents, editors, runtimes, tools, databases, infra);
+has 124 programs (agents, editors, runtimes, tools, databases, infra);
 `programs.json` here adds to it or changes entries field by field:
 
 ```json
@@ -770,16 +814,19 @@ has 120 programs (agents, editors, runtimes, tools, databases, infra);
 - `icon`: a path in the home folder. `tint: true` for a one-color glyph
   (drawn in `color` on a tile, or the text color), false for a picture.
 - `match`: other process names (or agents' `app` names) for the entry.
-- `run`: how to start it (`["cursor-agent"]`), for agents people start
+- `run`: how to start it (`["agent"]` for Cursor), for agents people start
   from a menu: `knownAgents()` lists the entries with one, and whether this
   machine (or another) has them installed. For example, override
   `"claude": { "run": ["my-claude"] }` or add
   `"claude-alt": { "name": "Claude (alt)", "icon": "icons/claude.svg", "run": ["my-claude-alt"] }`
   inside `programs`. Use programs or shell functions, not aliases (the launcher
-  does not expand them). On macOS the menu launcher loads login profiles before
+  does not expand them). On macOS both checks and the menu launcher load login profiles before
   running the agent and leaves an interactive login shell when it ends.
   Codex starts as `codex --no-daemon`: a shared Codex daemon would make later
   sessions use the first terminal's identity and stop with it.
+  An explicit key still wins over another entry's `match`, so a personal
+  `"python3": { "name": "…" }` keeps its name; only the generic `agent`
+  fallback yields to a `match` (Cursor's process is `agent`).
   On remote Unix machines, both the installed-agent check and launcher load
   that user's login/interactive shell for sh, bash, zsh, dash, ksh and fish, so
   its PATH includes shell-configured tools. Other shells keep the sh launcher.
@@ -933,11 +980,24 @@ Chained builders with GPUI's snake_case names: `div()`, `h_flex()`,
 `.overflow_y_scrollbar()`; `.child("text")`, `.text_size(n)`, `.font_semibold()`,
 `.truncate()`, `.text_color(c)`; `.bg(c)`, `.border(1)`, `.border_color(c)`,
 `.rounded(n)`; `.id("unique")` then `.on_click(...)`, `.on_mouse_down("right", ...)`,
-`.hover((s) => s.bg(c))`, `.on_scroll_wheel(...)`; keyboard: `this.h = cx.focus_handle()`
+`.hover((s) => s.bg(c))`, `.on_scroll_wheel(...)`, `.on_pinch(...)`; keyboard: `this.h = cx.focus_handle()`
 in init, `.track_focus(this.h).on_key_down((e, cx) => …)`, `this.h.focus()`.
+`ScrollHandle` from `gpui-base` scrolls a plain `overflow_*_scroll()` or
+`overflow_*_scrollbar()` area from code. Create `this.scroll = ScrollHandle.new()`
+in `init`, attach `.track_scroll(this.scroll)`, then call
+`this.scroll.scroll_to_item(index)` to reveal a zero-based direct child with
+only the movement needed. Requests run once after layout; visible children stay put.
 `.on_drop((event, cx) => …)` on a plain layout element receives external files as
 `event.paths` (absolute paths). The feedback form accepts dropped images with
 the same limits, previews and removal as picked images.
+`.id("file-row").drag_paths([absolutePath], { on: machine })` makes a plain layout
+element a file/folder drag source for terminals. Omit `on` (or use null)
+for local paths; remote paths retain their source machine. Ordinary clicks
+still work; dropping outside a terminal cancels without pasting.
+A terminal on the source machine receives quoted paths without Enter.
+Local files dropped onto a remote terminal are copied there like an OS file
+drop; local folders and remote paths dropped onto another machine are refused.
+Paths containing control characters are rejected, including clipboard files.
 `.on_hover((hovered, cx) => …)` reports pointer entry and exit on buttons
 and other interactive controls too.
 `.when(cond, (el) => …)`, `.children([...])`. Controls from `gpui-base`
@@ -983,7 +1043,8 @@ All of it is in `herdr.d.ts`. In short:
   returns an id; the mod gets `props().overlay` and closes itself with
   `closeOverlay(id)`; Esc closes the top dialog or popup. `frame: "none"`
   drops Apollo's border, corners and shadow so the mod draws its own.
-  `notify({ title, body, level, icon, timeout })` posts a notification, drawn by the `toast` mod.
+  `notify({ title, body, level, icon, timeout })` posts a notification, drawn
+  by the layout-chosen mod (default: `toast`).
 - Windows (`kind: "window"`): stay open until closed, over the layout and
   under dialogs; a press the mod doesn't stop drags it (stop it on your
   controls, like a title bar's buttons), it stays where dropped, and the one
@@ -1003,7 +1064,7 @@ All of it is in `herdr.d.ts`. In short:
   `knownAgents({ on })`: the agents people can start (programs.json's
   `run`), most picked first, each `installed` or not there (asked of the
   shell agents start in; a remote Unix machine's login/interactive shell when supported);
-  start one with `argv: agent.run`.
+  rejects if the check fails (failed checks are not cached); start one with `argv: agent.run`.
   `pickFolder({ prompt })`: the system's folder picker (here only),
   resolves with the folder or null.
 - Files: `readTextFile(path, { on })` (here, or on that machine),
@@ -1013,8 +1074,17 @@ All of it is in `herdr.d.ts`. In short:
   and trees above 4096 non-ignored directories reject the watch; use a timer fallback.
   macOS and Windows watch recursively, including ignored directories.
   A returned root path means refresh everything (the pending paths are bounded).
+  At most 64 folders can have pending watches at once; further folders reject.
+  Idle watches can be reclaimed to make room, so reload when starting a watch.
+  The returned promise also has `cancel()`: keep it and cancel when you stop
+  showing the folder. Cancellation resolves with `[]` and releases this call
+  without stopping other callers: `const watch = watchFolder(dir); watch.cancel();`.
+  Closing a mod copy cancels its pending calls.
   Files also refreshes on its 10-second timer:
   `cx.spawn(async (cx) => { for (;;) { await watchFolder(dir); this.reload(); cx.notify(); } })`.
+- Window title: `setWindowTitle(title)` sets the OS window's title, which window switchers,
+  taskbars and time trackers read. The last call wins; `null` restores `Apollo`. Call it when the
+  title changes, not on every render.
 - `notify({ ..., action: { name, args } })`: the toast runs the command when clicked.
 - This copy: `props()`, `shared(key)` / `setShared(key, value)` (every mod
   sees it; setting re-renders all), `nextCommand()` (key commands for this

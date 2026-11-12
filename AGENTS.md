@@ -107,6 +107,15 @@ Commit messages: lowercase conventional commits (`feat:`, `fix:`, `ci:`,
 
 ## Releases
 
+**Merge upstream first.** Before every release, merge Herdr's latest
+`upstream/master` into `main`: `git fetch upstream`, then on a branch
+`git merge upstream/master` (pick its newest commit whose ci passed if the
+tip is red), resolve conflicts keeping what Apollo keeps from Herdr (above),
+and land it through a pull request with a **merge commit**, never a squash,
+so the next merge only sees new upstream commits. Its CHANGELOG entries stay
+under their Herdr versions; the release's own entry says it took Herdr
+`x.y.z`. Only then bump and tag.
+
 Bump `version` in Cargo.toml, add its `## [x.y.z] - YYYY-MM-DD` section
 (`### New` / `### Fixed`) at the top of CHANGELOG.md (a test checks the top
 entry matches Cargo.toml; Apollo shows it as What's New), then push the tag

@@ -1194,6 +1194,17 @@ const CONTEXT_AND_VIEW: &str = r#"  /**
     context?: string;
   }
 
+  /** What an `on_pinch` handler receives. */
+  export interface PinchEvent {
+    /** The change in scale for this step: 0.1 is 10% larger, negative is smaller. */
+    delta: number;
+    touch_phase: "started" | "moved" | "ended" | "cancelled";
+    position: Point;
+    local_position?: Point;
+    bounds?: import("gpui-shell").ElementBounds;
+    modifiers: Modifiers;
+  }
+
   /** What an `on_scroll_wheel` handler receives. */
   export interface ScrollWheelEvent {
     /** The scroll distance in pixels, whichever unit the device reported. */
@@ -1453,6 +1464,12 @@ const ELEMENT_METHODS: &str = r#"    /**
      * for any button.
      */
     on_mouse_down_out<Self extends Element>(this: Self, handler: (event: MouseButtonEvent, cx: Context) => void): Self;
+    /**
+     * Makes a plain layout element a native file/folder drag source. Paths are
+     * absolute on `on` (a host-owned machine name); omitted/null means local.
+     * The payload keeps its source machine, and an ordinary click still works.
+     */
+    drag_paths<Self extends Element>(this: Self, paths: string[], options?: { on?: string | null }): Self;
     /** Files dropped from outside the app, as absolute paths. Use on a plain layout element. */
     on_drop<Self extends Element>(this: Self, handler: (event: { paths: string[] }, cx: Context) => void): Self;
     /**
@@ -1464,6 +1481,11 @@ const ELEMENT_METHODS: &str = r#"    /**
      * the gesture drives something else — a zoom, a value, a custom viewport.
      */
     on_scroll_wheel<Self extends Element>(this: Self, handler: (event: ScrollWheelEvent, cx: Context) => void): Self;
+    /**
+     * GPUI `InteractiveElement::on_pinch`: a two-finger trackpad pinch over
+     * this element, on platforms that report one.
+     */
+    on_pinch<Self extends Element>(this: Self, handler: (event: PinchEvent, cx: Context) => void): Self;
     /**
      * `handler(event, cx)` when the named action is dispatched to this element
      * or to something inside it.
@@ -1698,7 +1720,8 @@ const ELEMENT_METHODS: &str = r#"    /**
      */
     track_focus<Self extends Element>(this: Self, handle: FocusHandle): Self;
     /**
-     * Gives a virtual list the scroll position held by a
+     * Gives a plain overflow scroll area the position held by a `ScrollHandle`,
+     * or gives a virtual list the scroll position held by a
      * `VirtualListScrollHandle`, so the script can drive it with
      * `scroll_to_item` and `scroll_to_bottom`.
      *
@@ -1706,7 +1729,7 @@ const ELEMENT_METHODS: &str = r#"    /**
      * the id it was built with — which is the same place a `Scrollbar` named
      * after that id looks, so the bar works either way.
      */
-    track_scroll<Self extends Element>(this: Self, handle: import("gpui-base").VirtualListScrollHandle): Self;
+    track_scroll<Self extends Element>(this: Self, handle: import("gpui-base").VirtualListScrollHandle | import("gpui-base").ScrollHandle): Self;
     /**
      * Which item a virtual list measures to infer its size across the axis it
      * scrolls: a vertical list takes its width from this item, a horizontal
@@ -3004,6 +3027,20 @@ const BASE: &str = r#"  /** A row. */
     render: (range: ItemRange, cx: Context) => Element[],
   ): NativeElement;
 
+  /** A plain scroll area's position. Create in init() and attach with track_scroll. */
+  export interface ScrollHandle {
+    /** Reveal the zero-based direct child with the smallest scroll needed.
+     * Works on plain overflow_*_scroll and overflow_*_scrollbar elements.
+     * Requests are consumed once, after layout; already visible children stay put.
+     */
+    scroll_to_item(index: number): void;
+    /** Releases the handle. Using it afterwards throws. */
+    release(): boolean;
+  }
+
+  /** Create in init() and attach with track_scroll(handle). */
+  export const ScrollHandle: { new: () => ScrollHandle };
+
   /**
    * A virtual list's scroll position, kept across frames so the script can move
    * it. Create it in `init()` and hand it to the list with `track_scroll`.
@@ -3047,6 +3084,8 @@ const BASE: &str = r#"  /** A row. */
     replace_with_token(token: InlineToken): void;
     replace_range_with_token(range: InputRange, token: InlineToken): void;
     set_selected_range(range: InputRange): void;
+    /** The selection (UTF-16 offsets); start equals end at a plain cursor. */
+    selected_range(): InputRange;
     replace(text: string): void;
     value(): string;
     /** Plain text, or a content snapshot to restore its tokens as well. */
@@ -3116,6 +3155,8 @@ const BASE: &str = r#"  /** A row. */
     replace_with_token(token: InlineToken): void;
     replace_range_with_token(range: InputRange, token: InlineToken): void;
     set_selected_range(range: InputRange): void;
+    /** The selection (UTF-16 offsets); start equals end at a plain cursor. */
+    selected_range(): InputRange;
     replace(text: string): void;
     value(): string;
     /** Plain text, or a content snapshot to restore its tokens as well. */
@@ -3145,7 +3186,14 @@ const BASE: &str = r#"  /** A row. */
     value(): string;
     /** Programmatic replacement works even in readonly mode. */
     set_value(value: string): void;
+    /** The selection (UTF-16 offsets); start equals end at a plain cursor. */
+    selected_range(): InputRange;
+    set_selected_range(range: InputRange): void;
+    /** Replaces the selection with `text`, as typing would (one undo step). */
+    replace(text: string): void;
     on(event: "change" | "submit" | "focus" | "blur" | "paste_other", handler: (event: InputEvent, cx: Context) => void): boolean;
+    /** Moves the keyboard onto the editor. */
+    focus(): void;
     release(): boolean;
   }
   export const EditorState: {
@@ -3984,7 +4032,9 @@ mod tests {
         "on_mouse_up",
         "on_mouse_down_out",
         "on_drop",
+        "drag_paths",
         "on_scroll_wheel",
+        "on_pinch",
         "on_action",
         "key_context",
         "image",
