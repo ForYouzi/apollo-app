@@ -136,7 +136,8 @@ fn edge(vt: &Vt, y: u32, x: u16, top: u32) -> Joined {
             '[' => ']',
             _ => continue,
         };
-        if !opens_http(&r.cells, open + 1) {
+        // The wrapper the join drops must be plain text, as the closer must.
+        if !r.cells[open].plain() || !opens_http(&r.cells, open + 1) {
             continue;
         }
         match edge_chain(vt, (start_y, open + 1), closer, (y, x)) {

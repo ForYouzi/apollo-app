@@ -201,6 +201,17 @@ fn hardwrap_scan_leaves_osc8_authoritative() {
 }
 
 #[test]
+fn hardwrap_opener_must_be_plain() {
+    // A combining mark or a marked link on the `(` the join drops makes it no wrapper.
+    for opener in ["(\u{301}", "\x1b]8;;https://declared.test/\x1b\\(\x1b]8;;\x1b\\"] {
+        let vt = hard(30, 10, &[format!("x {opener}https://example.com/aaaaaaa"), "  bbbb)".into()]);
+        assert_ne!(at(&vt, 1, 3).as_deref(), Some("https://example.com/aaaaaaabbbb"), "{opener:?}");
+    }
+    let vt = hard(30, 10, &["x (https://example.com/aaaaaaaaa".into(), "  bbbb)".into()]);
+    assert_eq!(at(&vt, 1, 3).as_deref(), Some("https://example.com/aaaaaaaaabbbb"), "the plain fixture joins");
+}
+
+#[test]
 fn hardwrap_file_uri_is_never_joined() {
     let uri = "file:///tmp/aaaaaaaa/bbbbbbbb/cccccccc/dddddddd";
     let lines = hardwrap_lines(30, "x (", uri, &[2], ')');
