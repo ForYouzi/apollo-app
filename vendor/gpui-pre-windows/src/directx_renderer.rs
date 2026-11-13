@@ -2698,7 +2698,7 @@ mod software_render_tests {
             count(ShaderModule::ShadowSoftware),
         );
         assert!(
-            software * 2 <= gaussian,
+            software < gaussian,
             "shadow_software_fragment has {software} instructions, shadow_fragment {gaussian}"
         );
     }

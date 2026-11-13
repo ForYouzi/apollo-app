@@ -1771,6 +1771,19 @@ mod software_background_tests {
     use gpui::WindowBackgroundAppearance;
 
     #[test]
+    fn a_device_change_restores_the_requested_blur() {
+        // What `apply_background_appearance` draws as the device moves from a
+        // GPU to WARP and back: the request survives the opaque detour.
+        type A = WindowBackgroundAppearance;
+        let requested = A::Blurred;
+        let drawn: Vec<A> = [false, true, false]
+            .into_iter()
+            .map(|software| software_background(requested, software))
+            .collect();
+        assert_eq!(drawn, [A::Blurred, A::Opaque, A::Blurred]);
+    }
+
+    #[test]
     fn software_mode_draws_blur_opaque() {
         type A = WindowBackgroundAppearance;
         assert_eq!(software_background(A::Blurred, true), A::Opaque);

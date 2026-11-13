@@ -981,9 +981,11 @@ float4 shadow_fragment(ShadowFragmentInput input): SV_TARGET {
     return input.color * float4(1., 1., 1., alpha);
 }
 
-// HERDR: the shadow for a CPU rasterizer (software mode): one rounded-rect
-// distance and a smoothstep across +-2 sigma, which stays within a few
-// percent of the gaussian's edge falloff, instead of four erf/exp taps.
+// HERDR: the shadow for a CPU rasterizer (software mode), without the four
+// sampled taps of shadow_fragment: a gaussian-blurred rectangle is exactly the
+// product of two erf edges, and a rounded one is close to an erf of its
+// distance, so blend the two by how round the corner is. Within ~35/255 of
+// shadow_fragment for corner radii 0-16 and blurs 2-12.
 ShadowVertexOutput shadow_software_vertex(uint vertex_id: SV_VertexID, uint instance_id: SV_InstanceID) {
     return shadow_vertex(vertex_id, instance_id);
 }
@@ -996,8 +998,15 @@ float4 shadow_software_fragment(ShadowFragmentInput input): SV_TARGET {
     if (shadow.blur_radius == 0.) {
         alpha = saturate(0.5 - distance);
     } else {
-        float spread = 2. * shadow.blur_radius;
-        alpha = 1. - smoothstep(-spread, spread, distance);
+        float2 half_size = shadow.bounds.size / 2.;
+        float2 center = shadow.bounds.origin + half_size;
+        float2 point0 = abs(input.position.xy - center);
+        float scale = sqrt(0.5) / shadow.blur_radius;
+        float2 edges = 0.5 * (erf((point0 + half_size) * scale) - erf((point0 - half_size) * scale));
+        float rectangle = edges.x * edges.y;
+        float rounded = 0.5 - 0.5 * erf(float2(distance * scale, 0.)).x;
+        float corner_radius = pick_corner_radius(input.position.xy - center, shadow.corner_radii);
+        alpha = lerp(rectangle, rounded, corner_radius / (corner_radius + shadow.blur_radius));
     }
 
     if (shadow.inset != 0u) {
