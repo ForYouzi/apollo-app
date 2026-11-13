@@ -33,6 +33,7 @@ mod shader_compilation {
             "quad",
             "plain_quad",
             "shadow",
+            "shadow_software",
             "path_rasterization",
             "path_sprite",
             "underline",

@@ -450,12 +450,21 @@ impl WindowsPlatform {
             .name("VSyncProvider".to_owned())
             .spawn(move || {
                 let vsync_provider = VSyncProvider::new();
+                let mut last_tick = None;
                 loop {
                     let signal_source = vsync_provider.wait_for_vsync();
-                    let signal_at = PlatformFrameSignal::capture(scheduler::Instant::now);
                     if stop.load(Ordering::Acquire) {
                         break;
                     }
+                    // HERDR: a CPU rasterizer draws at most every SOFTWARE_FRAME_INTERVAL.
+                    let now = std::time::Instant::now();
+                    let due = tick_due(last_tick, now, directx_device.software);
+                    if due {
+                        last_tick = Some(now);
+                    }
+                    let signal_at = due
+                        .then(|| PlatformFrameSignal::capture(scheduler::Instant::now))
+                        .flatten();
                     if check_device_lost(&directx_device.device)
                         || invalidate_devices.fetch_and(false, Ordering::Acquire)
                     {
@@ -472,6 +481,9 @@ impl WindowsPlatform {
                     let Some(all_windows) = all_windows.upgrade() else {
                         break;
                     };
+                    if !due {
+                        continue;
+                    }
                     for hwnd in all_windows.read().iter() {
                         unsafe {
                             if let Some(signal_at) = signal_at {
@@ -493,6 +505,19 @@ impl WindowsPlatform {
             })
             .unwrap();
     }
+}
+
+/// HERDR: the shortest gap between frames on a CPU rasterizer (software
+/// mode), like SonicTerm's: a full-window frame there takes milliseconds of
+/// CPU, so ~30 fps leaves the CPU for the terminals. Input still lands within
+/// one gap.
+const SOFTWARE_FRAME_INTERVAL: std::time::Duration = std::time::Duration::from_millis(25);
+
+/// HERDR: whether this vsync should invalidate the windows: always with a GPU;
+/// in software mode once `SOFTWARE_FRAME_INTERVAL` passed since the last one.
+fn tick_due(last: Option<std::time::Instant>, now: std::time::Instant, software: bool) -> bool {
+    !software
+        || last.is_none_or(|last| now.saturating_duration_since(last) >= SOFTWARE_FRAME_INTERVAL)
 }
 
 fn translate_accelerator(msg: &MSG) -> Option<()> {
@@ -1937,5 +1962,33 @@ mod tests {
                 vec![12],
             )),
         );
+    }
+}
+
+#[cfg(test)]
+mod tick_due_tests {
+    use super::{SOFTWARE_FRAME_INTERVAL, tick_due};
+    use std::time::{Duration, Instant};
+
+    #[::core::prelude::v1::test]
+    fn a_gpu_draws_every_vsync() {
+        let now = Instant::now();
+        assert!(tick_due(None, now, false));
+        assert!(tick_due(Some(now), now, false));
+    }
+
+    #[::core::prelude::v1::test]
+    fn software_mode_draws_every_frame_interval() {
+        let now = Instant::now();
+        assert!(tick_due(None, now, true));
+        assert!(!tick_due(Some(now), now, true));
+        assert!(!tick_due(
+            Some(now),
+            now + SOFTWARE_FRAME_INTERVAL - Duration::from_millis(1),
+            true
+        ));
+        assert!(tick_due(Some(now), now + SOFTWARE_FRAME_INTERVAL, true));
+        // A clock that went backwards waits rather than drawing in a burst.
+        assert!(!tick_due(Some(now + Duration::from_secs(1)), now, true));
     }
 }

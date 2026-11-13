@@ -1314,6 +1314,8 @@ impl WindowsWindowInner {
         {
             panic!("Device lost: {err}");
         }
+        // HERDR: the new device may be a CPU rasterizer, or no longer one.
+        self.apply_background_appearance();
         // Make sure the first `draw_window` after recovery (whether it comes
         // from the forced WM_GPUI_FORCE_UPDATE_WINDOW or a stray WM_PAINT in
         // between) is treated as a forced render so it both clears
