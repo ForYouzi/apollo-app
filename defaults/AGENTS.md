@@ -268,7 +268,10 @@ Properties any node can have:
   system can (macOS, Windows, some Wayland compositors). Colors with alpha
   then show the desktop through frosted glass: make `background` and
   `canvas` transparent and give the sidebar a translucent `chrome`
-  (`"#0b102466"`). Nodes with solid colors stay solid.
+  (`"#0b102466"`). Nodes with solid colors stay solid. On Windows without a
+  GPU the window stays opaque instead: the app draws the cheaper way meant
+  for a CPU there (~30 fps, simple shadows; `GPUI_SOFTWARE_RENDER=force|off`
+  in the app's environment overrides `auto`).
 - Root only: `"preview": "layouts/<name>.svg"` (or png): the picture the
   settings screen shows for this layout. Draw one when you make a layout;
   without it the person sees a plain frame. New layouts and `themes/*.json`

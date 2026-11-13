@@ -65,6 +65,9 @@ pub(crate) struct DirectXRendererDevices {
     pub(crate) device_context: ID3D11DeviceContext,
     dxgi_device: Option<IDXGIDevice>,
     annotation: Option<ID3DUserDefinedAnnotation>,
+    /// HERDR: draw the cheaper way meant for a CPU rasterizer (WARP, Basic
+    /// Render Driver): no MSAA for paths, a one-step shadow.
+    software: bool,
 }
 
 struct DirectXResources {
@@ -76,7 +79,11 @@ struct DirectXResources {
     // Path intermediate textures (with MSAA)
     path_intermediate_texture: ID3D11Texture2D,
     path_intermediate_srv: Option<ID3D11ShaderResourceView>,
-    path_intermediate_msaa_texture: ID3D11Texture2D,
+    /// HERDR: software mode rasterizes paths straight into the intermediate
+    /// texture through this view; with MSAA it is None.
+    path_intermediate_view: Option<ID3D11RenderTargetView>,
+    /// HERDR: None in software mode.
+    path_intermediate_msaa_texture: Option<ID3D11Texture2D>,
     path_intermediate_msaa_view: Option<ID3D11RenderTargetView>,
 
     // Cached viewport
@@ -134,6 +141,7 @@ impl DirectXRendererDevices {
             dxgi_factory,
             device,
             device_context,
+            software,
         } = directx_devices;
         let dxgi_device = if disable_direct_composition {
             None
@@ -149,6 +157,7 @@ impl DirectXRendererDevices {
             device_context: device_context.clone(),
             dxgi_device,
             annotation,
+            software: *software,
         })
     }
 }
@@ -171,7 +180,7 @@ impl DirectXRenderer {
             .context("Creating DirectX resources")?;
         let globals = DirectXGlobalElements::new(&devices.device)
             .context("Creating DirectX global elements")?;
-        let pipelines = DirectXRenderPipelines::new(&devices.device)
+        let pipelines = DirectXRenderPipelines::new(&devices.device, devices.software)
             .context("Creating DirectX render pipelines")?;
 
         let direct_composition = if disable_direct_composition {
@@ -198,6 +207,14 @@ impl DirectXRenderer {
             height: 1,
             skip_draws: false,
         })
+    }
+
+    /// HERDR: whether this renderer draws the cheaper way meant for a CPU
+    /// rasterizer (see `directx_devices::software_render`).
+    pub(crate) fn software(&self) -> bool {
+        self.devices
+            .as_ref()
+            .is_some_and(|devices| devices.software)
     }
 
     pub(crate) fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {
@@ -301,7 +318,7 @@ impl DirectXRenderer {
         .context("Creating DirectX resources")?;
         let globals = DirectXGlobalElements::new(&devices.device)
             .context("Creating DirectXGlobalElements")?;
-        let pipelines = DirectXRenderPipelines::new(&devices.device)
+        let pipelines = DirectXRenderPipelines::new(&devices.device, devices.software)
             .context("Creating DirectXRenderPipelines")?;
 
         let direct_composition = if disable_direct_composition {
@@ -354,10 +371,7 @@ impl DirectXRenderer {
         scene: &Scene,
         background_appearance: WindowBackgroundAppearance,
     ) -> Result<()> {
-        self.pre_draw(&match background_appearance {
-            WindowBackgroundAppearance::Opaque => [1.0f32; 4],
-            _ => [0.0f32; 4],
-        })?;
+        self.pre_draw(&clear_color(background_appearance, self.software()))?;
         self.upload_scene_buffers(scene)?;
 
         let annotation = self
@@ -622,17 +636,19 @@ impl DirectXRenderer {
 
         let devices = self.devices.as_ref().context("devices missing")?;
         let resources = self.resources.as_ref().context("resources missing")?;
+        // HERDR: without MSAA (software mode), rasterize straight into the
+        // intermediate texture and skip the resolve.
+        let target = resources.path_rasterization_target();
         // Clear intermediate MSAA texture
         unsafe {
             devices.device_context.ClearRenderTargetView(
-                resources.path_intermediate_msaa_view.as_ref().unwrap(),
+                target.as_ref().context("path render target view missing")?,
                 &[0.0; 4],
             );
             // Set intermediate MSAA texture as render target
-            devices.device_context.OMSetRenderTargets(
-                Some(slice::from_ref(&resources.path_intermediate_msaa_view)),
-                None,
-            );
+            devices
+                .device_context
+                .OMSetRenderTargets(Some(slice::from_ref(target)), None);
         }
 
         // Collect all vertices and sprites for a single draw call
@@ -662,13 +678,15 @@ impl DirectXRenderer {
 
         // Resolve MSAA to non-MSAA intermediate texture
         unsafe {
-            devices.device_context.ResolveSubresource(
-                &resources.path_intermediate_texture,
-                0,
-                &resources.path_intermediate_msaa_texture,
-                0,
-                RENDER_TARGET_FORMAT,
-            );
+            if let Some(msaa_texture) = &resources.path_intermediate_msaa_texture {
+                devices.device_context.ResolveSubresource(
+                    &resources.path_intermediate_texture,
+                    0,
+                    msaa_texture,
+                    0,
+                    RENDER_TARGET_FORMAT,
+                );
+            }
             // Restore main render target
             devices
                 .device_context
@@ -826,7 +844,9 @@ impl DirectXRenderer {
     pub(crate) fn gpu_specs(&self) -> Result<GpuSpecs> {
         let devices = self.devices.as_ref().context("devices missing")?;
         let desc = unsafe { devices.adapter.GetDesc1() }?;
-        let is_software_emulated = (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32) != 0;
+        // HERDR: what the renderer does, so `GPUI_SOFTWARE_RENDER` and a Basic
+        // Render Driver without the software flag show here too.
+        let is_software_emulated = devices.software;
         let device_name = String::from_utf16_lossy(&desc.Description)
             .trim_matches(char::from(0))
             .to_string();
@@ -892,25 +912,19 @@ impl DirectXResources {
             )?
         };
 
-        let (
-            render_target,
-            render_target_view,
-            path_intermediate_texture,
-            path_intermediate_srv,
-            path_intermediate_msaa_texture,
-            path_intermediate_msaa_view,
-            viewport,
-        ) = create_resources(devices, &swap_chain, width, height)?;
-        set_rasterizer_state(&devices.device, &devices.device_context)?;
+        let (render_target, render_target_view, paths, viewport) =
+            create_resources(devices, &swap_chain, width, height)?;
+        set_rasterizer_state(&devices.device, &devices.device_context, !devices.software)?;
 
         Ok(Self {
             swap_chain,
             render_target: Some(render_target),
             render_target_view,
-            path_intermediate_texture,
-            path_intermediate_msaa_texture,
-            path_intermediate_msaa_view,
-            path_intermediate_srv,
+            path_intermediate_texture: paths.texture,
+            path_intermediate_srv: paths.srv,
+            path_intermediate_view: paths.view,
+            path_intermediate_msaa_texture: paths.msaa_texture,
+            path_intermediate_msaa_view: paths.msaa_view,
             viewport,
         })
     }
@@ -922,32 +936,41 @@ impl DirectXResources {
         width: u32,
         height: u32,
     ) -> Result<()> {
-        let (
-            render_target,
-            render_target_view,
-            path_intermediate_texture,
-            path_intermediate_srv,
-            path_intermediate_msaa_texture,
-            path_intermediate_msaa_view,
-            viewport,
-        ) = create_resources(devices, &self.swap_chain, width, height)?;
+        let (render_target, render_target_view, paths, viewport) =
+            create_resources(devices, &self.swap_chain, width, height)?;
         self.render_target = Some(render_target);
         self.render_target_view = render_target_view;
-        self.path_intermediate_texture = path_intermediate_texture;
-        self.path_intermediate_msaa_texture = path_intermediate_msaa_texture;
-        self.path_intermediate_msaa_view = path_intermediate_msaa_view;
-        self.path_intermediate_srv = path_intermediate_srv;
+        self.path_intermediate_texture = paths.texture;
+        self.path_intermediate_srv = paths.srv;
+        self.path_intermediate_view = paths.view;
+        self.path_intermediate_msaa_texture = paths.msaa_texture;
+        self.path_intermediate_msaa_view = paths.msaa_view;
         self.viewport = viewport;
         Ok(())
+    }
+
+    /// The view paths rasterize into: the MSAA texture, or in software mode
+    /// the intermediate texture itself.
+    fn path_rasterization_target(&self) -> &Option<ID3D11RenderTargetView> {
+        if self.path_intermediate_msaa_texture.is_some() {
+            &self.path_intermediate_msaa_view
+        } else {
+            &self.path_intermediate_view
+        }
     }
 }
 
 impl DirectXRenderPipelines {
-    pub fn new(device: &ID3D11Device) -> Result<Self> {
+    pub fn new(device: &ID3D11Device, software: bool) -> Result<Self> {
         let shadow_pipeline = PipelineState::new(
             device,
             "shadow_pipeline",
-            ShaderModule::Shadow,
+            // HERDR: one smoothstep instead of four gaussian taps on a CPU rasterizer.
+            if software {
+                ShaderModule::ShadowSoftware
+            } else {
+                ShaderModule::Shadow
+            },
             4,
             create_blend_state(device)?,
         )?;
@@ -1384,6 +1407,57 @@ fn create_swap_chain(
     Ok(swap_chain)
 }
 
+/// What a frame starts from. HERDR: software mode draws a blurred window
+/// opaque (see `software_background`) behind themes made transparent for the
+/// blur, mostly dark ones, so it starts from black rather than white there.
+fn clear_color(background_appearance: WindowBackgroundAppearance, software: bool) -> [f32; 4] {
+    match background_appearance {
+        WindowBackgroundAppearance::Opaque if software => [0.0, 0.0, 0.0, 1.0],
+        WindowBackgroundAppearance::Opaque => [1.0f32; 4],
+        _ => [0.0f32; 4],
+    }
+}
+
+/// The textures paths are drawn through.
+struct PathTargets {
+    texture: ID3D11Texture2D,
+    srv: Option<ID3D11ShaderResourceView>,
+    /// Software mode only: paths rasterize into `texture` directly.
+    view: Option<ID3D11RenderTargetView>,
+    /// None in software mode.
+    msaa_texture: Option<ID3D11Texture2D>,
+    msaa_view: Option<ID3D11RenderTargetView>,
+}
+
+fn create_path_targets(
+    device: &ID3D11Device,
+    width: u32,
+    height: u32,
+    software: bool,
+) -> Result<PathTargets> {
+    let (texture, srv) = create_path_intermediate_texture(device, width, height)?;
+    if software {
+        let mut view = None;
+        unsafe { device.CreateRenderTargetView(&texture, None, Some(&mut view))? };
+        return Ok(PathTargets {
+            texture,
+            srv,
+            view,
+            msaa_texture: None,
+            msaa_view: None,
+        });
+    }
+    let (msaa_texture, msaa_view) =
+        create_path_intermediate_msaa_texture_and_view(device, width, height)?;
+    Ok(PathTargets {
+        texture,
+        srv,
+        view: None,
+        msaa_texture: Some(msaa_texture),
+        msaa_view,
+    })
+}
+
 #[inline]
 fn create_resources(
     devices: &DirectXRendererDevices,
@@ -1393,18 +1467,12 @@ fn create_resources(
 ) -> Result<(
     ID3D11Texture2D,
     Option<ID3D11RenderTargetView>,
-    ID3D11Texture2D,
-    Option<ID3D11ShaderResourceView>,
-    ID3D11Texture2D,
-    Option<ID3D11RenderTargetView>,
+    PathTargets,
     D3D11_VIEWPORT,
 )> {
     let (render_target, render_target_view) =
         create_render_target_and_its_view(swap_chain, &devices.device)?;
-    let (path_intermediate_texture, path_intermediate_srv) =
-        create_path_intermediate_texture(&devices.device, width, height)?;
-    let (path_intermediate_msaa_texture, path_intermediate_msaa_view) =
-        create_path_intermediate_msaa_texture_and_view(&devices.device, width, height)?;
+    let paths = create_path_targets(&devices.device, width, height, devices.software)?;
     let viewport = D3D11_VIEWPORT {
         TopLeftX: 0.0,
         TopLeftY: 0.0,
@@ -1413,15 +1481,7 @@ fn create_resources(
         MinDepth: 0.0,
         MaxDepth: 1.0,
     };
-    Ok((
-        render_target,
-        render_target_view,
-        path_intermediate_texture,
-        path_intermediate_srv,
-        path_intermediate_msaa_texture,
-        path_intermediate_msaa_view,
-        viewport,
-    ))
+    Ok((render_target, render_target_view, paths, viewport))
 }
 
 #[inline]
@@ -1500,7 +1560,11 @@ fn create_path_intermediate_msaa_texture_and_view(
 }
 
 #[inline]
-fn set_rasterizer_state(device: &ID3D11Device, device_context: &ID3D11DeviceContext) -> Result<()> {
+fn set_rasterizer_state(
+    device: &ID3D11Device,
+    device_context: &ID3D11DeviceContext,
+    multisample: bool,
+) -> Result<()> {
     let desc = D3D11_RASTERIZER_DESC {
         FillMode: D3D11_FILL_SOLID,
         CullMode: D3D11_CULL_NONE,
@@ -1510,7 +1574,7 @@ fn set_rasterizer_state(device: &ID3D11Device, device_context: &ID3D11DeviceCont
         SlopeScaledDepthBias: 0.0,
         DepthClipEnable: true.into(),
         ScissorEnable: false.into(),
-        MultisampleEnable: true.into(),
+        MultisampleEnable: multisample.into(),
         AntialiasedLineEnable: false.into(),
     };
     let rasterizer_state = unsafe {
@@ -1806,6 +1870,7 @@ pub(crate) mod shader_resources {
         Quad,
         PlainQuad,
         Shadow,
+        ShadowSoftware,
         Underline,
         PathRasterization,
         PathSprite,
@@ -1865,6 +1930,10 @@ pub(crate) mod shader_resources {
                 ShaderModule::Shadow => match target {
                     ShaderTarget::Vertex => SHADOW_VERTEX_BYTES,
                     ShaderTarget::Fragment => SHADOW_FRAGMENT_BYTES,
+                },
+                ShaderModule::ShadowSoftware => match target {
+                    ShaderTarget::Vertex => SHADOW_SOFTWARE_VERTEX_BYTES,
+                    ShaderTarget::Fragment => SHADOW_SOFTWARE_FRAGMENT_BYTES,
                 },
                 ShaderModule::Underline => match target {
                     ShaderTarget::Vertex => UNDERLINE_VERTEX_BYTES,
@@ -1975,6 +2044,7 @@ pub(crate) mod shader_resources {
                 ShaderModule::Quad => "quad",
                 ShaderModule::PlainQuad => "plain_quad",
                 ShaderModule::Shadow => "shadow",
+                ShaderModule::ShadowSoftware => "shadow_software",
                 ShaderModule::Underline => "underline",
                 ShaderModule::PathRasterization => "path_rasterization",
                 ShaderModule::PathSprite => "path_sprite",
@@ -2268,7 +2338,7 @@ mod plain_quad_tests {
         }
         .expect("WARP device");
         let (device, context) = (device.unwrap(), context.unwrap());
-        let mut pipelines = DirectXRenderPipelines::new(&device).unwrap();
+        let mut pipelines = DirectXRenderPipelines::new(&device, false).unwrap();
         let globals = DirectXGlobalElements::new(&device).unwrap();
 
         let desc = D3D11_TEXTURE2D_DESC {
@@ -2404,5 +2474,310 @@ mod plain_quad_tests {
             "plain_quad_fragment has {} instructions; WARP runs each of them for every pixel",
             desc.InstructionCount
         );
+    }
+}
+
+/// HERDR: what software mode (a CPU rasterizer) draws differently, checked
+/// on WARP, which every Windows machine has (CI runners have no GPU).
+#[cfg(test)]
+mod software_render_tests {
+    use super::*;
+    use windows::Win32::Foundation::HMODULE;
+
+    const WIDTH: u32 = 96;
+    const HEIGHT: u32 = 64;
+
+    struct Warp {
+        device: ID3D11Device,
+        context: ID3D11DeviceContext,
+        globals: DirectXGlobalElements,
+    }
+
+    fn warp() -> Warp {
+        let mut device: Option<ID3D11Device> = None;
+        let mut context: Option<ID3D11DeviceContext> = None;
+        unsafe {
+            D3D11CreateDevice(
+                None,
+                D3D_DRIVER_TYPE_WARP,
+                HMODULE::default(),
+                D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                None,
+                D3D11_SDK_VERSION,
+                Some(&mut device),
+                None,
+                Some(&mut context),
+            )
+        }
+        .expect("WARP device");
+        let (device, context) = (device.unwrap(), context.unwrap());
+        let globals = DirectXGlobalElements::new(&device).unwrap();
+        update_buffer(
+            &context,
+            globals.global_params_buffer.as_ref().unwrap(),
+            &[GlobalParams {
+                viewport_size: [WIDTH as f32, HEIGHT as f32],
+                ..Default::default()
+            }],
+        )
+        .unwrap();
+        let viewport = D3D11_VIEWPORT {
+            TopLeftX: 0.,
+            TopLeftY: 0.,
+            Width: WIDTH as f32,
+            Height: HEIGHT as f32,
+            MinDepth: 0.,
+            MaxDepth: 1.,
+        };
+        unsafe {
+            context.RSSetViewports(Some(slice::from_ref(&viewport)));
+            context.VSSetConstantBuffers(0, Some(slice::from_ref(&globals.global_params_buffer)));
+            context.VSSetConstantBuffers(1, Some(slice::from_ref(&globals.batch_params_buffer)));
+            context.PSSetConstantBuffers(0, Some(slice::from_ref(&globals.global_params_buffer)));
+        }
+        Warp {
+            device,
+            context,
+            globals,
+        }
+    }
+
+    /// `texture`'s BGRA pixels.
+    fn read(warp: &Warp, texture: &ID3D11Texture2D) -> Vec<u8> {
+        let mut desc = D3D11_TEXTURE2D_DESC::default();
+        unsafe { texture.GetDesc(&mut desc) };
+        let staging_desc = D3D11_TEXTURE2D_DESC {
+            Usage: D3D11_USAGE_STAGING,
+            BindFlags: 0,
+            CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+            MiscFlags: 0,
+            ..desc
+        };
+        let mut staging: Option<ID3D11Texture2D> = None;
+        unsafe {
+            warp.device
+                .CreateTexture2D(&staging_desc, None, Some(&mut staging))
+        }
+        .unwrap();
+        let staging = staging.unwrap();
+        let row_bytes = desc.Width as usize * 4;
+        let mut pixels = vec![0u8; row_bytes * desc.Height as usize];
+        unsafe {
+            warp.context.CopyResource(&staging, texture);
+            let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+            warp.context
+                .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
+                .unwrap();
+            for row in 0..desc.Height as usize {
+                let source = (mapped.pData as *const u8).add(row * mapped.RowPitch as usize);
+                std::ptr::copy_nonoverlapping(
+                    source,
+                    pixels.as_mut_ptr().add(row * row_bytes),
+                    row_bytes,
+                );
+            }
+            warp.context.Unmap(&staging, 0);
+        }
+        pixels
+    }
+
+    fn bounds(x: f32, y: f32, width: f32, height: f32) -> Bounds<ScaledPixels> {
+        Bounds {
+            origin: point(ScaledPixels(x), ScaledPixels(y)),
+            size: size(ScaledPixels(width), ScaledPixels(height)),
+        }
+    }
+
+    /// The alpha of each pixel of one black shadow drawn by `software`'s
+    /// shadow pipeline onto a transparent target.
+    fn shadow_alpha(software: bool, shadow: Shadow) -> Vec<u8> {
+        let warp = warp();
+        let mut pipelines = DirectXRenderPipelines::new(&warp.device, software).unwrap();
+        let targets = create_path_targets(&warp.device, WIDTH, HEIGHT, true).unwrap();
+        let view = targets.view;
+        unsafe {
+            warp.context
+                .ClearRenderTargetView(view.as_ref().unwrap(), &[0.; 4]);
+            warp.context
+                .OMSetRenderTargets(Some(slice::from_ref(&view)), None);
+        }
+        pipelines
+            .shadow_pipeline
+            .update_buffer(&warp.device, &warp.context, &[shadow])
+            .unwrap();
+        pipelines
+            .shadow_pipeline
+            .draw_range(
+                &warp.context,
+                warp.globals.batch_params_buffer.as_ref().unwrap(),
+                0,
+                1,
+            )
+            .unwrap();
+        read(&warp, &targets.texture)
+            .chunks_exact(4)
+            .map(|bgra| bgra[3])
+            .collect()
+    }
+
+    fn drop_shadow(blur: f32) -> Shadow {
+        Shadow {
+            order: 0,
+            blur_radius: ScaledPixels(blur),
+            bounds: bounds(24., 16., 48., 32.),
+            corner_radii: Corners::all(ScaledPixels(6.)),
+            content_mask: ContentMask {
+                bounds: bounds(0., 0., WIDTH as f32, HEIGHT as f32),
+            },
+            color: hsla(0., 0., 0., 1.),
+            element_bounds: bounds(24., 16., 48., 32.),
+            element_corner_radii: Corners::all(ScaledPixels(6.)),
+            inset: 0,
+            pad: 0,
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn software_mode_starts_opaque_frames_from_black() {
+        type A = WindowBackgroundAppearance;
+        assert_eq!(clear_color(A::Opaque, false), [1.0; 4]);
+        assert_eq!(clear_color(A::Opaque, true), [0.0, 0.0, 0.0, 1.0]);
+        for software in [false, true] {
+            assert_eq!(clear_color(A::Transparent, software), [0.0; 4]);
+            assert_eq!(clear_color(A::Blurred, software), [0.0; 4]);
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn software_shadow_looks_like_the_gaussian_one() {
+        for blur in [0., 4., 8.] {
+            let gaussian = shadow_alpha(false, drop_shadow(blur));
+            let software = shadow_alpha(true, drop_shadow(blur));
+            let at = |alpha: &[u8], x: u32, y: u32| alpha[(y * WIDTH + x) as usize];
+            // Solid in the middle, empty in the corner, like the gaussian.
+            assert!(at(&software, 48, 32) > 240, "blur {blur}: middle");
+            assert_eq!(at(&software, 0, 0), 0, "blur {blur}: corner");
+            // Fading out monotonically from the middle row's center to the edge.
+            let row: Vec<u8> = (48..WIDTH).map(|x| at(&software, x, 32)).collect();
+            assert!(
+                row.windows(2).all(|pair| pair[1] <= pair[0]),
+                "blur {blur}: not monotone: {row:?}"
+            );
+            let worst = gaussian
+                .iter()
+                .zip(&software)
+                .map(|(a, b)| a.abs_diff(*b))
+                .max()
+                .unwrap();
+            assert!(worst <= 40, "blur {blur}: off the gaussian by {worst}/255");
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn software_shadow_fragment_is_cheaper() {
+        let count = |module| {
+            let raw = RawShaderBytes::new(module, ShaderTarget::Fragment).unwrap();
+            let bytes = raw.as_bytes();
+            let reflection: ID3D11ShaderReflection = unsafe {
+                let mut out = std::ptr::null_mut();
+                windows::Win32::Graphics::Direct3D::Fxc::D3DReflect(
+                    bytes.as_ptr().cast(),
+                    bytes.len(),
+                    &ID3D11ShaderReflection::IID,
+                    &mut out,
+                )
+                .unwrap();
+                ID3D11ShaderReflection::from_raw(out)
+            };
+            let mut desc = D3D11_SHADER_DESC::default();
+            unsafe { reflection.GetDesc(&mut desc) }.unwrap();
+            desc.InstructionCount
+        };
+        let (gaussian, software) = (
+            count(ShaderModule::Shadow),
+            count(ShaderModule::ShadowSoftware),
+        );
+        assert!(
+            software * 2 <= gaussian,
+            "shadow_software_fragment has {software} instructions, shadow_fragment {gaussian}"
+        );
+    }
+
+    /// The intermediate texture after rasterizing one triangle the way
+    /// `draw_paths_to_intermediate` does, with or without MSAA.
+    fn path_pixels(software: bool) -> (Vec<u8>, bool) {
+        let warp = warp();
+        set_rasterizer_state(&warp.device, &warp.context, !software).unwrap();
+        let mut pipelines = DirectXRenderPipelines::new(&warp.device, software).unwrap();
+        let targets = create_path_targets(&warp.device, WIDTH, HEIGHT, software).unwrap();
+        let target = if targets.msaa_texture.is_some() {
+            &targets.msaa_view
+        } else {
+            &targets.view
+        };
+        unsafe {
+            warp.context
+                .ClearRenderTargetView(target.as_ref().unwrap(), &[0.; 4]);
+            warp.context
+                .OMSetRenderTargets(Some(slice::from_ref(target)), None);
+        }
+        let clip = bounds(0., 0., WIDTH as f32, HEIGHT as f32);
+        let vertices: Vec<PathRasterizationSprite> = [(4., 4.), (90., 10.), (30., 60.)]
+            .into_iter()
+            .map(|(x, y)| PathRasterizationSprite {
+                xy_position: point(ScaledPixels(x), ScaledPixels(y)),
+                // A solid fill: the curve test `s * s - t` is always inside.
+                st_position: point(0., 1.),
+                color: hsla(0., 0., 0., 1.).into(),
+                bounds: clip,
+            })
+            .collect();
+        pipelines
+            .path_rasterization_pipeline
+            .update_buffer(&warp.device, &warp.context, &vertices)
+            .unwrap();
+        pipelines
+            .path_rasterization_pipeline
+            .draw(
+                &warp.context,
+                D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
+                vertices.len() as u32,
+                1,
+            )
+            .unwrap();
+        if let Some(msaa) = &targets.msaa_texture {
+            unsafe {
+                warp.context
+                    .ResolveSubresource(&targets.texture, 0, msaa, 0, RENDER_TARGET_FORMAT)
+            };
+        }
+        (
+            read(&warp, &targets.texture),
+            targets.msaa_texture.is_some(),
+        )
+    }
+
+    #[::core::prelude::v1::test]
+    fn software_paths_skip_msaa_and_cover_the_same_pixels() {
+        let (msaa, had_msaa) = path_pixels(false);
+        let (software, has_msaa) = path_pixels(true);
+        assert!(had_msaa && !has_msaa);
+        let covered = |pixels: &[u8]| pixels.chunks_exact(4).filter(|p| p[3] >= 128).count();
+        let (msaa_covered, software_covered) = (covered(&msaa), covered(&software));
+        assert!(
+            msaa_covered > 1000,
+            "the triangle must draw: {msaa_covered}"
+        );
+        // Only the edge pixels may differ: no MSAA there.
+        assert!(
+            msaa_covered.abs_diff(software_covered) * 20 <= msaa_covered,
+            "MSAA covers {msaa_covered} pixels, software {software_covered}"
+        );
+        let differing = msaa
+            .chunks_exact(4)
+            .zip(software.chunks_exact(4))
+            .filter(|(a, b)| a[3].abs_diff(b[3]) > 160)
+            .count();
+        assert!(differing * 20 <= msaa_covered, "{differing} pixels differ");
     }
 }

@@ -14,8 +14,8 @@ use windows::Win32::{
             D3D11_SDK_VERSION, D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext,
         },
         Dxgi::{
-            CreateDXGIFactory2, DXGI_CREATE_FACTORY_DEBUG, DXGI_CREATE_FACTORY_FLAGS,
-            IDXGIAdapter1, IDXGIFactory6,
+            CreateDXGIFactory2, DXGI_ADAPTER_FLAG_SOFTWARE, DXGI_CREATE_FACTORY_DEBUG,
+            DXGI_CREATE_FACTORY_FLAGS, IDXGIAdapter1, IDXGIFactory6,
         },
     },
 };
@@ -35,12 +35,35 @@ pub(crate) fn try_to_recover_from_device_lost<T>(mut f: impl FnMut() -> Result<T
         .context("DirectXRenderer failed to recover from lost device after multiple attempts")
 }
 
+/// HERDR: `auto` (default), `force` or `off`: draw the cheaper way meant for
+/// a CPU rasterizer.
+pub(crate) const SOFTWARE_RENDER: &str = "GPUI_SOFTWARE_RENDER";
+/// Microsoft's PCI vendor id: WARP, and the "Microsoft Basic Render Driver"
+/// Windows falls back to without a GPU driver, which doesn't always carry the
+/// software flag.
+const MICROSOFT_VENDOR_ID: u32 = 0x1414;
+
+/// HERDR: whether to draw the cheaper way meant for a CPU rasterizer, from
+/// `GPUI_SOFTWARE_RENDER` and the adapter.
+pub(crate) fn software_render(env: Option<&str>, adapter_flags: u32, vendor_id: u32) -> bool {
+    match env.map(str::trim) {
+        Some(v) if v.eq_ignore_ascii_case("force") => true,
+        Some(v) if v.eq_ignore_ascii_case("off") => false,
+        _ => {
+            adapter_flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0
+                || vendor_id == MICROSOFT_VENDOR_ID
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct DirectXDevices {
     pub(crate) adapter: IDXGIAdapter1,
     pub(crate) dxgi_factory: IDXGIFactory6,
     pub(crate) device: ID3D11Device,
     pub(crate) device_context: ID3D11DeviceContext,
+    /// HERDR: draw the cheaper way; see [`software_render`].
+    pub(crate) software: bool,
 }
 
 impl DirectXDevices {
@@ -62,12 +85,25 @@ impl DirectXDevices {
             }
             _ => unreachable!(),
         }
+        let env = std::env::var(SOFTWARE_RENDER).ok();
+        let desc = unsafe { adapter.GetDesc1() }.context("Describing DXGI adapter")?;
+        let software = software_render(env.as_deref(), desc.Flags, desc.VendorId);
+        if software {
+            log::info!(
+                "Software rendering (adapter flags {:#x}, vendor {:#x}, {SOFTWARE_RENDER}={}): \
+                 no MSAA, simple shadows, opaque windows, ~30 fps",
+                desc.Flags,
+                desc.VendorId,
+                env.as_deref().unwrap_or("auto"),
+            );
+        }
 
         Ok(Self {
             adapter,
             dxgi_factory,
             device,
             device_context,
+            software,
         })
     }
 }
@@ -190,5 +226,34 @@ fn get_device(
         Err(anyhow::anyhow!(
             "Required feature StructuredBuffer is not supported by GPU/driver"
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SOFTWARE: u32 = DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32;
+    const NVIDIA: u32 = 0x10DE;
+
+    #[test]
+    fn auto_follows_the_adapter() {
+        assert!(software_render(None, SOFTWARE, MICROSOFT_VENDOR_ID));
+        // Basic Render Driver without the software flag.
+        assert!(software_render(None, 0, MICROSOFT_VENDOR_ID));
+        assert!(software_render(Some("auto"), SOFTWARE, NVIDIA));
+        assert!(!software_render(None, 0, NVIDIA));
+        assert!(!software_render(Some("auto"), 0, NVIDIA));
+        // Unknown values fall back to auto.
+        assert!(!software_render(Some("yes"), 0, NVIDIA));
+        assert!(software_render(Some(""), 0, MICROSOFT_VENDOR_ID));
+    }
+
+    #[test]
+    fn force_and_off_override_the_adapter() {
+        assert!(software_render(Some("force"), 0, NVIDIA));
+        assert!(software_render(Some(" Force "), 0, NVIDIA));
+        assert!(!software_render(Some("off"), SOFTWARE, MICROSOFT_VENDOR_ID));
+        assert!(!software_render(Some("OFF"), 0, MICROSOFT_VENDOR_ID));
     }
 }

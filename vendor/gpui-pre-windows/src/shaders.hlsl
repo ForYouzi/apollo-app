@@ -981,6 +981,35 @@ float4 shadow_fragment(ShadowFragmentInput input): SV_TARGET {
     return input.color * float4(1., 1., 1., alpha);
 }
 
+// HERDR: the shadow for a CPU rasterizer (software mode): one rounded-rect
+// distance and a smoothstep across +-2 sigma, which stays within a few
+// percent of the gaussian's edge falloff, instead of four erf/exp taps.
+ShadowVertexOutput shadow_software_vertex(uint vertex_id: SV_VertexID, uint instance_id: SV_InstanceID) {
+    return shadow_vertex(vertex_id, instance_id);
+}
+
+float4 shadow_software_fragment(ShadowFragmentInput input): SV_TARGET {
+    Shadow shadow = shadows[input.shadow_id];
+
+    float distance = quad_sdf(input.position.xy, shadow.bounds, shadow.corner_radii);
+    float alpha;
+    if (shadow.blur_radius == 0.) {
+        alpha = saturate(0.5 - distance);
+    } else {
+        float spread = 2. * shadow.blur_radius;
+        alpha = 1. - smoothstep(-spread, spread, distance);
+    }
+
+    if (shadow.inset != 0u) {
+        alpha = 1.0 - alpha;
+        float element_distance = quad_sdf(input.position.xy, shadow.element_bounds,
+                                          shadow.element_corner_radii);
+        alpha *= saturate(0.5 - element_distance);
+    }
+
+    return input.color * float4(1., 1., 1., alpha);
+}
+
 /*
 **
 **              Path Rasterization

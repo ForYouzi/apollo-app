@@ -50,6 +50,9 @@ pub struct WindowsWindowState {
     pub border_offset: WindowBorderOffset,
     pub appearance: Cell<WindowAppearance>,
     pub background_appearance: Cell<WindowBackgroundAppearance>,
+    /// HERDR: what the app asked for; `background_appearance` is what is drawn
+    /// (see `software_background`), recomputed when the renderer changes.
+    pub requested_background_appearance: Cell<WindowBackgroundAppearance>,
     pub scale_factor: Cell<f32>,
     pub restore_from_minimized: Cell<Option<Box<dyn FnMut(RequestFrameOptions)>>>,
 
@@ -165,6 +168,7 @@ impl WindowsWindowState {
             border_offset,
             appearance: Cell::new(appearance),
             background_appearance: Cell::new(WindowBackgroundAppearance::Opaque),
+            requested_background_appearance: Cell::new(WindowBackgroundAppearance::Opaque),
             scale_factor: Cell::new(scale_factor),
             restore_from_minimized: Cell::new(restore_from_minimized),
             min_size,
@@ -254,6 +258,40 @@ impl WindowsWindowState {
 }
 
 impl WindowsWindowInner {
+    /// HERDR: draws the requested background, as `software_background` maps it
+    /// for the current renderer. Called again after the device is recreated,
+    /// which can move the window between a GPU and a CPU rasterizer.
+    pub(crate) fn apply_background_appearance(&self) {
+        let background_appearance = software_background(
+            self.state.requested_background_appearance.get(),
+            self.state.renderer.borrow().software(),
+        );
+        self.state.background_appearance.set(background_appearance);
+        let hwnd = self.hwnd;
+
+        // using Dwm APIs for Mica and MicaAlt backdrops.
+        // others follow the set_window_composition_attribute approach
+        match background_appearance {
+            WindowBackgroundAppearance::Opaque => {
+                set_window_composition_attribute(hwnd, None, 0);
+            }
+            WindowBackgroundAppearance::Transparent => {
+                set_window_composition_attribute(hwnd, None, 2);
+            }
+            WindowBackgroundAppearance::Blurred => {
+                set_window_composition_attribute(hwnd, Some((0, 0, 0, 0)), 4);
+            }
+            WindowBackgroundAppearance::MicaBackdrop => {
+                // DWMSBT_MAINWINDOW => MicaBase
+                dwm_set_window_composition_attribute(hwnd, 2);
+            }
+            WindowBackgroundAppearance::MicaAltBackdrop => {
+                // DWMSBT_TABBEDWINDOW => MicaAlt
+                dwm_set_window_composition_attribute(hwnd, 4);
+            }
+        }
+    }
+
     /// Whether the window is being presented: shown and not minimized. Windows
     /// has no notification for a window fully covered by other windows, so
     /// that case reports `Visible`.
@@ -913,30 +951,10 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance) {
-        self.state.background_appearance.set(background_appearance);
-        let hwnd = self.0.hwnd;
-
-        // using Dwm APIs for Mica and MicaAlt backdrops.
-        // others follow the set_window_composition_attribute approach
-        match background_appearance {
-            WindowBackgroundAppearance::Opaque => {
-                set_window_composition_attribute(hwnd, None, 0);
-            }
-            WindowBackgroundAppearance::Transparent => {
-                set_window_composition_attribute(hwnd, None, 2);
-            }
-            WindowBackgroundAppearance::Blurred => {
-                set_window_composition_attribute(hwnd, Some((0, 0, 0, 0)), 4);
-            }
-            WindowBackgroundAppearance::MicaBackdrop => {
-                // DWMSBT_MAINWINDOW => MicaBase
-                dwm_set_window_composition_attribute(hwnd, 2);
-            }
-            WindowBackgroundAppearance::MicaAltBackdrop => {
-                // DWMSBT_TABBEDWINDOW => MicaAlt
-                dwm_set_window_composition_attribute(hwnd, 4);
-            }
-        }
+        self.state
+            .requested_background_appearance
+            .set(background_appearance);
+        self.0.apply_background_appearance();
     }
 
     fn minimize(&self) {
@@ -1731,5 +1749,47 @@ mod tests {
             state.update(MouseButton::Right, point(DevicePixels(10), DevicePixels(0))),
             1
         );
+    }
+}
+
+/// HERDR: a CPU rasterizer (software mode) draws an opaque window instead of
+/// acrylic: DWM's blur costs most without a GPU, and an opaque window keeps
+/// ClearType text.
+fn software_background(
+    appearance: WindowBackgroundAppearance,
+    software: bool,
+) -> WindowBackgroundAppearance {
+    match appearance {
+        WindowBackgroundAppearance::Blurred if software => WindowBackgroundAppearance::Opaque,
+        appearance => appearance,
+    }
+}
+
+#[cfg(test)]
+mod software_background_tests {
+    use super::software_background;
+    use gpui::WindowBackgroundAppearance;
+
+    #[test]
+    fn software_mode_draws_blur_opaque() {
+        type A = WindowBackgroundAppearance;
+        assert_eq!(software_background(A::Blurred, true), A::Opaque);
+        for kept in [
+            A::Opaque,
+            A::Transparent,
+            A::MicaBackdrop,
+            A::MicaAltBackdrop,
+        ] {
+            assert_eq!(software_background(kept, true), kept);
+        }
+        for appearance in [
+            A::Opaque,
+            A::Transparent,
+            A::Blurred,
+            A::MicaBackdrop,
+            A::MicaAltBackdrop,
+        ] {
+            assert_eq!(software_background(appearance, false), appearance);
+        }
     }
 }
