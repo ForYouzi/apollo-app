@@ -1,5 +1,12 @@
 # Apollo changelog
 
+## [0.0.5] - 2026-11-13
+
+Takes Herdr 0.1.15 (no new Herdr changes since 0.0.4).
+
+### New
+- **Windows without a GPU draws the cheaper way** (a VM, Remote Desktop, or the Microsoft Basic Render Driver): about 30 frames a second, no antialiasing pass for shapes, simple shadows, and an opaque window instead of `window_blur`, which keeps ClearType text. `GPUI_SOFTWARE_RENDER=force` or `off` overrides the automatic choice. (#11)
+
 ## [0.0.4] - 2026-11-12
 
 ### New
