@@ -23,7 +23,7 @@ xattr -dr com.apple.quarantine /Applications/Apollo.app
 On Windows, unzip the `apollo-app` folder anywhere; `apollo-app.exe` opens the app.
 The folder also holds `herdr-app.exe`, the same program: adding the folder to your PATH gives you the `herdr-app` command the docs use.
 
-On a Windows machine without a GPU (a VM, Remote Desktop, or the Microsoft Basic Render Driver), Apollo draws the cheaper way meant for a CPU: about 30 frames a second, no antialiasing passes for shapes, simple shadows, and an opaque window instead of `window_blur` (what a theme leaves transparent shows black), which keeps ClearType text. Set `GPUI_SOFTWARE_RENDER` to `force` to draw that way on a GPU too, or `off` to never do it; the default `auto` decides from the graphics adapter.
+On a Windows machine without a GPU (a VM, Remote Desktop, or the Microsoft Basic Render Driver), Apollo draws the cheaper way meant for a CPU: about 30 frames a second, no antialiasing passes for shapes, simple shadows, an opaque window instead of `window_blur` (what a theme leaves transparent shows black), and grayscale text instead of ClearType, whose colored edges blur over Remote Desktop. Set `GPUI_SOFTWARE_RENDER` to `force` to draw that way on a GPU too, or `off` to never do it; the default `auto` decides from the graphics adapter.
 
 Apollo installs [herdr-core](https://github.com/herdrdev/herdr-core) when it is missing, and can update a core it cannot use.
 
