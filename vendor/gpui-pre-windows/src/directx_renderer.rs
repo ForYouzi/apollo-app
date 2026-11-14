@@ -36,6 +36,19 @@ pub(crate) struct FontInfo {
     pub is_bgr: bool,
 }
 
+/// HERDR: the gamma ratios and grayscale and subpixel contrast the text
+/// shaders get. A CPU rasterizer (software mode: a VM, Remote Desktop) uses
+/// glyph coverage as the alpha with no contrast boost or gamma correction,
+/// as SonicTerm does: DirectWrite's boost thickens dark text, and over a
+/// compressed remote screen its heavier edges read as blur.
+fn text_blend(font: &FontInfo, software: bool) -> ([f32; 4], f32, f32) {
+    if software {
+        ([0.0; 4], 0.0, 0.0)
+    } else {
+        (font.gamma_ratios, font.grayscale_enhanced_contrast, font.subpixel_enhanced_contrast)
+    }
+}
+
 pub(crate) struct DirectXRenderer {
     hwnd: HWND,
     atlas: Arc<DirectXAtlas>,
@@ -228,14 +241,16 @@ impl DirectXRenderer {
             .as_ref()
             .expect("devices missing")
             .device_context;
+        let (gamma_ratios, grayscale_enhanced_contrast, subpixel_enhanced_contrast) =
+            text_blend(self.font_info, self.software());
         update_buffer(
             device_context,
             self.globals.global_params_buffer.as_ref().unwrap(),
             &[GlobalParams {
-                gamma_ratios: self.font_info.gamma_ratios,
+                gamma_ratios,
                 viewport_size: [resources.viewport.Width, resources.viewport.Height],
-                grayscale_enhanced_contrast: self.font_info.grayscale_enhanced_contrast,
-                subpixel_enhanced_contrast: self.font_info.subpixel_enhanced_contrast,
+                grayscale_enhanced_contrast,
+                subpixel_enhanced_contrast,
                 is_bgr: self.font_info.is_bgr as u32,
                 _pad: [0; 3],
             }],
@@ -2474,6 +2489,25 @@ mod plain_quad_tests {
             "plain_quad_fragment has {} instructions; WARP runs each of them for every pixel",
             desc.InstructionCount
         );
+    }
+}
+
+#[cfg(test)]
+mod text_blend_tests {
+    use super::{FontInfo, text_blend};
+
+    #[test]
+    fn software_mode_blends_glyph_coverage_linearly() {
+        let font = FontInfo {
+            gamma_ratios: [0.1, -0.2, 0.3, -0.4],
+            grayscale_enhanced_contrast: 1.0,
+            subpixel_enhanced_contrast: 0.5,
+            is_bgr: false,
+        };
+        // Like SonicTerm: coverage is the alpha, with no contrast boost and
+        // no gamma correction that thickens dark text.
+        assert_eq!(text_blend(&font, true), ([0.0; 4], 0.0, 0.0));
+        assert_eq!(text_blend(&font, false), ([0.1, -0.2, 0.3, -0.4], 1.0, 0.5));
     }
 }
 
