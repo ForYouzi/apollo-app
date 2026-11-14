@@ -1,5 +1,13 @@
 # Apollo changelog
 
+## [0.0.6] - 2026-11-13
+
+Takes Herdr 0.1.15 and its later changes up to b67715e: terminal font weight (`font_weight`, default 500, the same Medium weight as before) and cell width settings, a folder for new worktrees, tab names that follow their agent's session title, middle-click paste of the selection on Linux, and smoother tab bar scrolling. (#17)
+
+### Fixed
+- **Text on Windows without a GPU is sharp over Remote Desktop.** It is drawn grayscale, with no contrast boost, instead of ClearType, whose colored edges blur when Remote Desktop compresses the screen. (#15, #16)
+- **Powerline prompts draw like SonicTerm:** arrows and rounded caps have smooth edges instead of hard steps, and an arrow's tip is no longer cut flat by the next segment. (#16)
+
 ## [0.0.5] - 2026-11-13
 
 Takes Herdr 0.1.15 (no new Herdr changes since 0.0.4).
