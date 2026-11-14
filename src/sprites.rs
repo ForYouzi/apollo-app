@@ -345,15 +345,18 @@ fn powerline_svg(c: char, [x, y, w, h]: [f32; 4], line: f32) -> Option<(String, 
 /// slants, drawn to fill the cell exactly as Ghostty does. Fonts that have
 /// them rarely match the cell, and fonts that don't fall back to whatever
 /// font has those codes (on Linux, sometimes digits).
-fn powerline(c: char, (x, y, w, h): (f32, f32, f32, f32), line: f32, color: Hsla, window: &mut Window, cx: &App) {
-    let solid = (c as u32).is_multiple_of(2);
-    let scale = window.scale_factor();
-    // A solid shape reaches a device pixel past its cell's sides, so its flat
-    // edge meets the neighbor's color without an anti-aliased seam.
-    let ext = if solid { 1.0 } else { 0.0 };
-    let (left, right) = ((x * scale).round() - ext, ((x + w) * scale).round() + ext);
+/// The device-pixel tile ([left, top, width, height]) a powerline shape fills:
+/// its cell snapped like the cell's background, so neighbors meet exactly. A
+/// tile reaching past the cell would paint over the next arrow's tip.
+fn powerline_tile((x, y, w, h): (f32, f32, f32, f32), scale: f32) -> [f32; 4] {
+    let (left, right) = ((x * scale).round(), ((x + w) * scale).round());
     let (top, bottom) = ((y * scale).round(), ((y + h) * scale).round());
-    let (tw, th) = (right - left, bottom - top);
+    [left, top, right - left, bottom - top]
+}
+
+fn powerline(c: char, (x, y, w, h): (f32, f32, f32, f32), line: f32, color: Hsla, window: &mut Window, cx: &App) {
+    let scale = window.scale_factor();
+    let [left, top, tw, th] = powerline_tile((x, y, w, h), scale);
     let line = line * scale;
     if tw <= 0.0 || th <= 0.0 {
         return;
@@ -399,13 +402,32 @@ mod tests {
         let tip: u32 = (pad + 9..w).map(|x| a[((h / 2) * w + x) as usize] as u32).sum();
         assert!(tip > 0, "the mitered tip reaches past the cell");
         // Solid shapes need no padding: they already fill their tile.
-        assert_eq!(powerline_svg('\u{E0B0}', [0.0, 0.0, 11.0, 20.0], 1.0).unwrap().1, 0.0);
+        assert_eq!(powerline_svg('\u{E0B0}', [0.0, 0.0, 9.0, 20.0], 1.0).unwrap().1, 0.0);
+    }
+
+    #[test]
+    fn neighbouring_powerline_arrows_do_not_cover_each_other() {
+        // A prompt is arrow after arrow: `dotan` then a dark arrow in the next
+        // cell. A tile that reaches past its cell paints over the previous
+        // arrow's tip and cuts it flat (the "half cut" U+E0B0).
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            for w in [8.4, 9.0, 9.6] {
+                for col in 0..6 {
+                    let x = 3.3 + col as f32 * w;
+                    let a = powerline_tile((x, 0.0, w, 20.0), scale);
+                    let b = powerline_tile((x + w, 0.0, w, 20.0), scale);
+                    assert_eq!(a[0] + a[2], b[0], "scale {scale} width {w} col {col}: {a:?} then {b:?}");
+                    // Each tile is its snapped cell, as the cell's background is.
+                    assert_eq!(a[0], (x * scale).round());
+                }
+            }
+        }
     }
 
     #[test]
     fn powerline_shapes_are_antialiased_like_sonicterm() {
-        // A solid right arrow in a 9x20 cell, reaching a pixel past each side.
-        let (w, h, a, _) = powerline_alpha('\u{E0B0}', [0.0, 0.0, 11.0, 20.0], 1.0);
+        // A solid right arrow filling a 9x20 cell.
+        let (w, h, a, _) = powerline_alpha('\u{E0B0}', [0.0, 0.0, 9.0, 20.0], 1.0);
         let at = |x: u32, y: u32| a[(y * w + x) as usize];
         // The flat side is fully covered between the two corner pixels.
         assert!((1..h - 1).all(|y| at(0, y) == 255), "flat side: {:?}", (0..h).map(|y| at(0, y)).collect::<Vec<_>>());
