@@ -2,7 +2,7 @@
 //! exactly, as Ghostty does. Font glyphs for these rarely span the whole
 //! cell, so tables get gaps between rows and block art gets seams.
 
-use gpui::{Bounds, Hsla, PathBuilder, Pixels, Window, fill, point, px, size};
+use gpui::{App, Bounds, Hsla, PathBuilder, Pixels, TransformationMatrix, Window, fill, point, px, size};
 
 /// Per direction (up, right, down, left): 0 none, 1 light, 2 heavy, 3 double.
 fn lines(c: char) -> Option<[u8; 4]> {
@@ -171,7 +171,7 @@ pub fn is_sprite(text: &str) -> bool {
 }
 
 /// Paints `text` (one sprite character) into `cell`, snapped to device pixels.
-pub fn paint(text: &str, cell: Bounds<Pixels>, color: Hsla, window: &mut Window) {
+pub fn paint(text: &str, cell: Bounds<Pixels>, color: Hsla, window: &mut Window, cx: &App) {
     let Some(c) = text.chars().next() else { return };
     let scale = window.scale_factor();
     let snap = |v: f32| (v * scale).round() / scale;
@@ -200,7 +200,7 @@ pub fn paint(text: &str, cell: Bounds<Pixels>, color: Hsla, window: &mut Window)
     }
     if ('\u{E0B0}'..='\u{E0BF}').contains(&c) {
         let line = (w / 8.0).round().max(1.0 / scale);
-        powerline(c, (x, y, w, h), line, color, window);
+        powerline(c, (x, y, w, h), line, color, window, cx);
         return;
     }
     if let Some((rects, alpha)) = blocks(c) {
@@ -293,53 +293,154 @@ pub fn paint(text: &str, cell: Bounds<Pixels>, color: Hsla, window: &mut Window)
     }
 }
 
+/// SVG for a powerline separator filling `tile` ([x, y, width, height] in
+/// device pixels); outline variants use `line`-wide strokes. `paint_svg`
+/// rasterizes it on the CPU with anti-aliasing (resvg/tiny-skia) and caches
+/// the mask, as SonicTerm does with its powerline glyphs, so edges stay
+/// smooth on every renderer, including a CPU one without MSAA for paths.
+fn powerline_svg(c: char, [x, y, w, h]: [f32; 4], line: f32) -> Option<(String, f32)> {
+    if !('\u{E0B0}'..='\u{E0BF}').contains(&c) {
+        return None;
+    }
+    let solid = (c as u32).is_multiple_of(2);
+    let p = |px_: f32, py_: f32| format!("{} {}", x + px_ * w, y + py_ * h);
+    // Half an ellipse filling the cell: four quarter arcs as cubics.
+    const K: f32 = 0.552_284_8;
+    let d = match c {
+        '\u{E0B0}' | '\u{E0B1}' => format!("M{}L{}L{}", p(0.0, 0.0), p(1.0, 0.5), p(0.0, 1.0)),
+        '\u{E0B2}' | '\u{E0B3}' => format!("M{}L{}L{}", p(1.0, 0.0), p(0.0, 0.5), p(1.0, 1.0)),
+        '\u{E0B4}' | '\u{E0B5}' => format!(
+            "M{}C{} {} {}C{} {} {}",
+            p(0.0, 0.0), p(K, 0.0), p(1.0, 0.5 - K / 2.0), p(1.0, 0.5),
+            p(1.0, 0.5 + K / 2.0), p(K, 1.0), p(0.0, 1.0)
+        ),
+        '\u{E0B6}' | '\u{E0B7}' => format!(
+            "M{}C{} {} {}C{} {} {}",
+            p(1.0, 0.0), p(1.0 - K, 0.0), p(0.0, 0.5 - K / 2.0), p(0.0, 0.5),
+            p(0.0, 0.5 + K / 2.0), p(1.0 - K, 1.0), p(1.0, 1.0)
+        ),
+        '\u{E0B8}' => format!("M{}L{}L{}", p(0.0, 0.0), p(1.0, 1.0), p(0.0, 1.0)),
+        '\u{E0BA}' => format!("M{}L{}L{}", p(1.0, 0.0), p(1.0, 1.0), p(0.0, 1.0)),
+        '\u{E0BC}' => format!("M{}L{}L{}", p(0.0, 0.0), p(1.0, 0.0), p(0.0, 1.0)),
+        '\u{E0BE}' => format!("M{}L{}L{}", p(0.0, 0.0), p(1.0, 0.0), p(1.0, 1.0)),
+        '\u{E0B9}' | '\u{E0BF}' => format!("M{}L{}", p(0.0, 0.0), p(1.0, 1.0)),
+        _ => format!("M{}L{}", p(0.0, 1.0), p(1.0, 0.0)), // E0BB, E0BD
+    };
+    let (style, close) = if solid {
+        ("fill=\"#000\"".to_string(), "Z")
+    } else {
+        (format!("fill=\"none\" stroke=\"#000\" stroke-width=\"{line}\" stroke-miterlimit=\"4\""), "")
+    };
+    // An outline's stroke is centered on the shape, so it reaches past the
+    // cell: half the line, and up to twice it at a mitered tip (miter limit
+    // 4, as paint_path's stroker uses). Pad the tile so none of it is cut.
+    let pad = if solid { 0.0 } else { (2.0 * line).ceil() };
+    let (vx, vy, vw, vh) = (x - pad, y - pad, w + 2.0 * pad, h + 2.0 * pad);
+    Some((format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{vw}\" height=\"{vh}\" viewBox=\"{vx} {vy} {vw} {vh}\"><path {style} d=\"{d}{close}\"/></svg>"
+    ), pad))
+}
+
 /// Nerd Font powerline separators (U+E0B0..E0BF): arrows, half circles and
 /// slants, drawn to fill the cell exactly as Ghostty does. Fonts that have
 /// them rarely match the cell, and fonts that don't fall back to whatever
 /// font has those codes (on Linux, sometimes digits).
-fn powerline(c: char, (x, y, w, h): (f32, f32, f32, f32), line: f32, color: Hsla, window: &mut Window) {
-    let solid = (c as u32).is_multiple_of(2);
-    // A solid shape reaches a device pixel past its cell's sides, so its flat
-    // edge meets the neighbor's color without an anti-aliased seam.
-    let ext = if solid { 1.0 / window.scale_factor() } else { 0.0 };
-    let p = |px_: f32, py_: f32| point(px(x + px_ * w + (px_ - 0.5) * 2.0 * ext), px(y + py_ * h));
-    let mut path = if solid { PathBuilder::fill() } else { PathBuilder::stroke(px(line)) };
-    // Half an ellipse filling the cell: four quarter arcs as cubics.
-    const K: f32 = 0.552_284_8;
-    match c {
-        '\u{E0B0}' | '\u{E0B1}' => path.add_polygon(&[p(0.0, 0.0), p(1.0, 0.5), p(0.0, 1.0)], solid),
-        '\u{E0B2}' | '\u{E0B3}' => path.add_polygon(&[p(1.0, 0.0), p(0.0, 0.5), p(1.0, 1.0)], solid),
-        '\u{E0B4}' | '\u{E0B5}' => {
-            path.move_to(p(0.0, 0.0));
-            path.cubic_bezier_to(p(1.0, 0.5), p(K, 0.0), p(1.0, 0.5 - K / 2.0));
-            path.cubic_bezier_to(p(0.0, 1.0), p(1.0, 0.5 + K / 2.0), p(K, 1.0));
-            if solid {
-                path.close();
-            }
-        }
-        '\u{E0B6}' | '\u{E0B7}' => {
-            path.move_to(p(1.0, 0.0));
-            path.cubic_bezier_to(p(0.0, 0.5), p(1.0 - K, 0.0), p(0.0, 0.5 - K / 2.0));
-            path.cubic_bezier_to(p(1.0, 1.0), p(0.0, 0.5 + K / 2.0), p(1.0 - K, 1.0));
-            if solid {
-                path.close();
-            }
-        }
-        '\u{E0B8}' => path.add_polygon(&[p(0.0, 0.0), p(1.0, 1.0), p(0.0, 1.0)], true),
-        '\u{E0BA}' => path.add_polygon(&[p(1.0, 0.0), p(1.0, 1.0), p(0.0, 1.0)], true),
-        '\u{E0BC}' => path.add_polygon(&[p(0.0, 0.0), p(1.0, 0.0), p(0.0, 1.0)], true),
-        '\u{E0BE}' => path.add_polygon(&[p(0.0, 0.0), p(1.0, 0.0), p(1.0, 1.0)], true),
-        '\u{E0B9}' | '\u{E0BF}' => path.add_polygon(&[p(0.0, 0.0), p(1.0, 1.0)], false),
-        _ => path.add_polygon(&[p(0.0, 1.0), p(1.0, 0.0)], false), // E0BB, E0BD
+/// The device-pixel tile ([left, top, width, height]) a powerline shape fills:
+/// its cell snapped like the cell's background, so neighbors meet exactly. A
+/// tile reaching past the cell would paint over the next arrow's tip.
+fn powerline_tile((x, y, w, h): (f32, f32, f32, f32), scale: f32) -> [f32; 4] {
+    let (left, right) = ((x * scale).round(), ((x + w) * scale).round());
+    let (top, bottom) = ((y * scale).round(), ((y + h) * scale).round());
+    [left, top, right - left, bottom - top]
+}
+
+fn powerline(c: char, (x, y, w, h): (f32, f32, f32, f32), line: f32, color: Hsla, window: &mut Window, cx: &App) {
+    let scale = window.scale_factor();
+    let [left, top, tw, th] = powerline_tile((x, y, w, h), scale);
+    let line = line * scale;
+    if tw <= 0.0 || th <= 0.0 {
+        return;
     }
-    if let Ok(path) = path.build() {
-        window.paint_path(path, color);
-    }
+    let Some((svg, pad)) = powerline_svg(c, [0.0, 0.0, tw, th], line) else { return };
+    // The atlas keys a mask by this path and its size, so the line width,
+    // which the size doesn't capture, is part of the path.
+    let key = format!("herdr-sprites/powerline/{:x}/{line}", c as u32);
+    let bounds = Bounds::new(
+        point(px((left - pad) / scale), px((top - pad) / scale)),
+        size(px((tw + 2.0 * pad) / scale), px((th + 2.0 * pad) / scale)),
+    );
+    let _ = window.paint_svg(bounds, key.into(), Some(svg.as_bytes()), TransformationMatrix::unit(), color, cx);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The alpha of each pixel of `powerline_svg`'s tile, rasterized the way
+    /// `paint_svg` does it (gpui's resvg/tiny-skia CPU path), at 1x, and the
+    /// padding the tile has around the shape on each side.
+    fn powerline_alpha(c: char, tile: [f32; 4], line: f32) -> (u32, u32, Vec<u8>, u32) {
+        let (svg, pad) = powerline_svg(c, tile, line).expect("a powerline shape");
+        let (w, h) = ((tile[2] + 2.0 * pad).round() as u32, (tile[3] + 2.0 * pad).round() as u32);
+        let renderer = gpui::SvgRenderer::new(std::sync::Arc::new(()));
+        let image = renderer.render_single_frame(svg.as_bytes(), 0.5).unwrap();
+        let frame = image.as_bytes(0).unwrap();
+        let alpha: Vec<u8> = frame.chunks_exact(4).map(|p| p[3]).collect();
+        assert_eq!(alpha.len(), (w * h) as usize, "tile size");
+        (w, h, alpha, pad as u32)
+    }
+
+    #[test]
+    fn powerline_outlines_keep_the_stroke_past_the_cell() {
+        // paint_path centered the stroke on the shape, so half of it (more at
+        // a mitered tip) reached past the cell; the tile must keep it.
+        let (w, h, a, pad) = powerline_alpha('\u{E0B5}', [0.0, 0.0, 9.0, 20.0], 2.0);
+        assert!(pad >= 1, "outline tiles are padded");
+        let past_right = pad + 9;
+        assert!(past_right < w && a[((h / 2) * w + past_right) as usize] > 64, "stroke past the right edge");
+        let (w, h, a, pad) = powerline_alpha('\u{E0B1}', [0.0, 0.0, 9.0, 20.0], 2.0);
+        let tip: u32 = (pad + 9..w).map(|x| a[((h / 2) * w + x) as usize] as u32).sum();
+        assert!(tip > 0, "the mitered tip reaches past the cell");
+        // Solid shapes need no padding: they already fill their tile.
+        assert_eq!(powerline_svg('\u{E0B0}', [0.0, 0.0, 9.0, 20.0], 1.0).unwrap().1, 0.0);
+    }
+
+    #[test]
+    fn neighbouring_powerline_arrows_do_not_cover_each_other() {
+        // A prompt is arrow after arrow: `dotan` then a dark arrow in the next
+        // cell. A tile that reaches past its cell paints over the previous
+        // arrow's tip and cuts it flat (the "half cut" U+E0B0).
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            for w in [8.4, 9.0, 9.6] {
+                for col in 0..6 {
+                    let x = 3.3 + col as f32 * w;
+                    let a = powerline_tile((x, 0.0, w, 20.0), scale);
+                    let b = powerline_tile((x + w, 0.0, w, 20.0), scale);
+                    assert_eq!(a[0] + a[2], b[0], "scale {scale} width {w} col {col}: {a:?} then {b:?}");
+                    // Each tile is its snapped cell, as the cell's background is.
+                    assert_eq!(a[0], (x * scale).round());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn powerline_shapes_are_antialiased_like_sonicterm() {
+        // A solid right arrow filling a 9x20 cell.
+        let (w, h, a, _) = powerline_alpha('\u{E0B0}', [0.0, 0.0, 9.0, 20.0], 1.0);
+        let at = |x: u32, y: u32| a[(y * w + x) as usize];
+        // The flat side is fully covered between the two corner pixels.
+        assert!((1..h - 1).all(|y| at(0, y) == 255), "flat side: {:?}", (0..h).map(|y| at(0, y)).collect::<Vec<_>>());
+        // The tip reaches the far side at mid height.
+        assert!(at(w - 1, h / 2) > 0 || at(w - 1, h / 2 - 1) > 0);
+        // The slanted edges are smooth: partially covered pixels, not stair steps.
+        let partial = a.iter().filter(|&&v| v > 16 && v < 240).count();
+        assert!(partial >= h as usize, "{partial} partially covered pixels");
+        // An outline (thin) arrow is antialiased too, and leaves its inside empty.
+        let (w, h, a, pad) = powerline_alpha('\u{E0B1}', [0.0, 0.0, 9.0, 20.0], 1.0);
+        assert!(a.iter().any(|&v| v > 16 && v < 240));
+        assert!(a[((h / 2) * w + pad + 1) as usize] < 64, "outline arrow is hollow");
+    }
 
     #[test]
     fn braille_patterns_use_all_eight_bits_and_stay_in_the_cell() {
@@ -378,12 +479,12 @@ mod tests {
         impl Render for BrailleScene {
             fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
                 let (w, h) = (self.w, self.h);
-                div().size_full().bg(rgb(0)).child(canvas(|_, _, _| {}, move |_, _, window, _| {
+                div().size_full().bg(rgb(0)).child(canvas(|_, _, _| {}, move |_, _, window, cx| {
                     for (col, c) in ['⠀', '⠁', '⠂', '⠄', '⠈', '⠐', '⠠', '⡀', '⢀', '⣿'].into_iter().enumerate() {
                         paint(&c.to_string(), Bounds::new(
                             point(px(7.3 + col as f32 * w), px(5.7)),
                             size(px(w), px(h)),
-                        ), rgb(0xffffff).into(), window);
+                        ), rgb(0xffffff).into(), window, cx);
                     }
                 }).size_full())
             }
@@ -447,13 +548,13 @@ mod tests {
         impl Render for BoxScene {
             fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
                 let (w, h) = (self.w, self.h);
-                div().size_full().bg(rgb(0)).child(canvas(|_, _, _| {}, move |_, _, window, _| {
+                div().size_full().bg(rgb(0)).child(canvas(|_, _, _| {}, move |_, _, window, cx| {
                     for (row, text) in ["╭─╮", "│ │", "╰─╯"].iter().enumerate() {
                         for (col, c) in text.chars().enumerate() {
                             paint(&c.to_string(), Bounds::new(
                                 point(px(7.3 + col as f32 * w), px(5.7 + row as f32 * h)),
                                 size(px(w), px(h)),
-                            ), rgb(0xffffff).into(), window);
+                            ), rgb(0xffffff).into(), window, cx);
                         }
                     }
                 }).size_full())

@@ -55,7 +55,7 @@ impl Render for Scene {
             .child(
                 canvas(
                     |_, _, _| {},
-                    |_, _, window, _| {
+                    |_, _, window, cx| {
                         for (x, width) in [(110., 9.), (119., 9.5)] {
                             for row in 0..2 {
                                 sprites::paint(
@@ -66,6 +66,7 @@ impl Render for Scene {
                                     ),
                                     rgb(0xffffff).into(),
                                     window,
+                                    cx,
                                 );
                             }
                         }

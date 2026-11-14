@@ -941,7 +941,7 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn is_subpixel_rendering_supported(&self) -> bool {
-        true
+        subpixel_text(self.state.renderer.borrow().software())
     }
 
     fn set_title(&mut self, title: &str) {
@@ -1752,9 +1752,29 @@ mod tests {
     }
 }
 
+/// HERDR: whether text may use ClearType. Not on a CPU rasterizer (software
+/// mode): that means a VM or Remote Desktop, where the screen reaching the
+/// person is compressed (RDP subsamples color) and its subpixel order is
+/// unknown, so ClearType's colored edges smear into blurred text. Grayscale
+/// stays sharp there.
+fn subpixel_text(software: bool) -> bool {
+    !software
+}
+
+#[cfg(test)]
+mod subpixel_text_tests {
+    use super::subpixel_text;
+
+    #[test]
+    fn software_mode_draws_grayscale_text() {
+        assert!(!subpixel_text(true));
+        assert!(subpixel_text(false));
+    }
+}
+
 /// HERDR: a CPU rasterizer (software mode) draws an opaque window instead of
-/// acrylic: DWM's blur costs most without a GPU, and an opaque window keeps
-/// ClearType text.
+/// acrylic: DWM's blur costs most without a GPU. Text there is grayscale
+/// either way (see `subpixel_text`).
 fn software_background(
     appearance: WindowBackgroundAppearance,
     software: bool,
