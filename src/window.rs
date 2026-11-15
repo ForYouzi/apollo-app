@@ -816,7 +816,7 @@ impl AppWindow {
 
     /// After an update: unseen spotlights. Asked for: the pending range, or this version's notes.
     fn open_whats_new(&mut self, asked: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let notes = if asked { crate::update_notes::notes(crate::update::ready().as_deref()) } else { crate::update_notes::spotlights() };
+        let notes = if asked { crate::update_notes::notes(None) } else { crate::update_notes::spotlights() };
         if notes.is_empty() {
             self.run("app.settings", json!({ "section": "updates" }), window, cx);
             return;
@@ -3550,18 +3550,11 @@ impl AppWindow {
                 self.write_person(|p| p.zoom = zoom, window, cx);
             }
             "app.quit" => cx.quit(),
+            // Apollo never installs itself: the latest release's page, to download it.
             "app.update" => {
-                match crate::update::apply() {
-                    Ok(true) => {}
-                    Ok(false) => return self.fail("no update is ready yet"),
-                    Err(error) => {
-                        let reason = format!("Couldn't replace {}'s files: {error}.", crate::brand::NAME);
-                        return self.fail(if cfg!(windows) { format!("Close {}'s terminals (or restart Windows) and try again. {reason}", crate::brand::NAME) } else { reason });
-                    }
-                }
-                self.drain_documents(window, cx);
-                crate::update::relaunch();
-                cx.quit();
+                use crate::links::Opener as _;
+                let url = crate::update::latest().map_or_else(|| crate::brand::RELEASES_PAGE.to_owned(), |r| r.url);
+                crate::links::SystemOpener.open_url(&url);
             }
             "window.close" | "window.minimize" | "window.maximize" => return self.window_command(name, window, cx),
             // Hiding apps is macOS's (bound natively there).
@@ -4672,21 +4665,21 @@ impl AppWindow {
 const UPDATE_PILL_HEIGHT: f32 = 34.0;
 
 impl AppWindow {
-    /// "Herdr 0.2.0 is ready · Restart": the frame's, so no layout or mod can hide it.
+    /// "Apollo 0.2.0 is out · Download": the frame's, so no layout or mod can hide it.
     /// What's waiting, in words: the pill shows it until clicked or dismissed.
     fn update_label() -> Option<String> {
         let core = crate::update::core();
         let core = core.ready.filter(|_| !core.updating && core.managed.is_none());
-        match (crate::update::ready(), core) {
-            (Some(a), Some(c)) => Some(format!("{} {a} and herdr-core {c} are ready", crate::brand::NAME)),
-            (Some(a), None) => Some(format!("{} {a} is ready", crate::brand::NAME)),
+        match (crate::update::latest().map(|r| r.version), core) {
+            (Some(a), Some(c)) => Some(format!("{} {a} is out and herdr-core {c} is ready", crate::brand::NAME)),
+            (Some(a), None) => Some(format!("{} {a} is out", crate::brand::NAME)),
             (None, Some(c)) => Some(format!("herdr-core {c} is ready")),
             (None, None) => None,
         }
     }
 
     fn render_update_pill(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let app_version = crate::update::ready();
+        let app_version = crate::update::latest().map(|r| r.version);
         let app_ready = app_version.is_some();
         let success = self.update_ready.is_none() && self.update_success;
         let label = self.update_ready.clone().or_else(|| success.then(|| format!("Updated to {}", env!("CARGO_PKG_VERSION"))))?;
@@ -4712,7 +4705,7 @@ impl AppWindow {
             .child(div().text_color(c("foreground")).child(label.clone()))
             .when(app_ready, |pill| pill.child(
                 div()
-                    .id("update-restart")
+                    .id("update-download")
                     .h(settings::z(24.0))
                     .px(settings::z(10.0))
                     .flex()
@@ -4723,7 +4716,7 @@ impl AppWindow {
                     .text_color(c("accent_foreground"))
                     .font_weight(FontWeight::SEMIBOLD)
                     .hover(|s| s.opacity(0.9))
-                    .child("Restart")
+                    .child("Download")
                     .on_click(cx.listener(|this, _, w, cx| this.run("app.update", json!({}), w, cx))),
             ))
             .child(div().id("update-notes").px(settings::z(6.0)).cursor_pointer().text_color(c("accent"))

@@ -786,11 +786,12 @@ export default class Settings extends View {
               });
     const primary = (id, label, f) =>
       div().id(id).px(12).py(5).rounded(7).cursor_pointer().bg(t.accent).text_color(t.accent_foreground).text_size(13).font_semibold().hover((s) => s.opacity(0.9)).on_click(f).child(label);
-    const app = !u.app.updates
-      ? ["Apollo doesn't update itself: download new versions from the Releases page.", null]
-      : u.app.ready
-        ? [`${u.app.ready} is ready. Restart to switch now; it also switches when you quit.`, primary("st-app-update", "Restart to update", () => run("app.update"))]
-        : [result, check("st-check-app")];
+    // Apollo never installs itself: a newer release is a download from its page.
+    const app = u.app.latest
+      ? [`Apollo ${u.app.latest} is out. Download it from the Releases page.`, primary("st-app-update", "Download", () => run("app.update"))]
+      : u.checks
+        ? [u.checking || u.checked ? result : "Apollo doesn't update itself: new versions are on the Releases page.", check("st-check-app")]
+        : ["Apollo doesn't update itself: new versions are on the Releases page.", null];
     const c = u.core;
     const core = c.managed
       ? [`Managed by ${c.managed}: update it there.${c.ready ? ` ${c.ready} is available.` : ""}`, u.checks ? check("st-check-core") : null]
@@ -812,7 +813,7 @@ export default class Settings extends View {
       .child(div().h(18))
       .child(this.heading(t, "herdr-core"))
       .child(this.row(t, `herdr-core ${c.version ?? ""}`, core[0], core[1] ?? div()))
-      .child(div().pt(12).text_size(12.5).line_height("18px").text_color(t.dim).child("Apollo looks for herdr-core updates every hour and tells you in the corner; new Apollo versions are on the Releases page. herdr-core runs your terminals, so they keep running through its updates."));
+      .child(div().pt(12).text_size(12.5).line_height("18px").text_color(t.dim).child("Apollo looks for a new Apollo release on GitHub and for herdr-core updates every hour, and tells you in the corner. Apollo never installs itself: download new versions from the Releases page. herdr-core runs your terminals, so they keep running through its updates."));
   }
 
 
@@ -891,7 +892,7 @@ export default class Settings extends View {
   render(cx) {
     const t = theme();
     const u = updates();
-    const waiting = Boolean(u.app.ready || (u.core.ready && !u.core.managed));
+    const waiting = Boolean(u.app.latest || (u.core.ready && !u.core.managed));
     const nav = v_flex()
       .flex_none()
       .w(190)

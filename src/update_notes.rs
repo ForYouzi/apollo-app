@@ -97,7 +97,6 @@ impl Launch {
 }
 
 static LAUNCH: Mutex<Option<Launch>> = Mutex::new(None);
-static FETCHED: Mutex<Option<Vec<Note>>> = Mutex::new(None);
 static MEDIA: LazyLock<Mutex<MediaCache>> = LazyLock::new(|| Mutex::new(MediaCache::default()));
 
 fn path(name: &str) -> std::path::PathBuf {
@@ -126,29 +125,10 @@ pub fn started(first_install: bool) {
     std::thread::spawn(|| fetch_media(&all()));
 }
 
-pub fn cache(text: &str) {
-    let notes = parse(text);
-    if notes.is_empty() { return; }
-    *FETCHED.lock().unwrap() = Some(notes.clone());
-    std::thread::spawn(move || fetch_media(&notes));
-    if let Err(e) = std::fs::write(path("update-notes-cache.md"), text) {
-        tracing::warn!("update notes cache: {e}");
-    }
-}
-
-pub fn has(version: &str) -> bool {
-    all().iter().any(|note| note.version == version)
-}
-
+/// Apollo's notes: its own CHANGELOG only. `update-notes-cache.md` in the shared
+/// folder holds Herdr's release notes (Herdr writes it), never Apollo's.
 fn all() -> Vec<Note> {
     let mut notes = parse(include_str!("../CHANGELOG.md"));
-    let fetched = FETCHED.lock().unwrap().get_or_insert_with(|| {
-        std::fs::read_to_string(path("update-notes-cache.md")).map(|s| parse(&s)).unwrap_or_default()
-    }).clone();
-    // The running binary's curated notes win over cached copies of its releases.
-    for note in fetched {
-        if !notes.iter().any(|n| n.version == note.version) { notes.push(note); }
-    }
     notes.sort_by(|a, b| if crate::update::newer(&a.version, &b.version) { std::cmp::Ordering::Less } else if crate::update::newer(&b.version, &a.version) { std::cmp::Ordering::Greater } else { std::cmp::Ordering::Equal });
     notes
 }
@@ -298,16 +278,11 @@ mod tests {
         }
     }
     #[test]
-    fn cached_notes_are_read_once_and_version_specific() {
-        let previous = FETCHED.lock().unwrap().take();
-        all();
-        assert!(FETCHED.lock().unwrap().is_some());
-        *FETCHED.lock().unwrap() = Some(Vec::new());
-        assert!(!has("99.0.0"));
-        *FETCHED.lock().unwrap() = Some(parse("## [99.0.0] - 2026-10-30\n- Test release\n"));
-        assert!(has("99.0.0"));
-        assert!(!has("99.0.1"));
-        *FETCHED.lock().unwrap() = previous;
+    fn notes_are_apollos_changelog_only() {
+        let versions: Vec<String> = all().into_iter().map(|n| n.version).collect();
+        assert!(versions.iter().any(|v| v == env!("CARGO_PKG_VERSION")), "{versions:?}");
+        let changelog = include_str!("../CHANGELOG.md");
+        assert!(versions.iter().all(|v| changelog.contains(&format!("## [{v}]"))), "{versions:?}");
     }
     #[test]
     fn first_install_only_welcomes() {

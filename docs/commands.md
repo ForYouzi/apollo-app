@@ -518,7 +518,7 @@ Open the settings (section: look, alerts, updates).
 
 ## `app.check_updates`
 
-Look for a newer herdr-core now. Apollo never updates itself: new versions are on the Releases page.
+Look for a newer herdr-core and Apollo release now. Apollo never updates itself: new versions are on the Releases page.
 
 No arguments.
 
@@ -562,7 +562,7 @@ No arguments.
 
 ## `app.update`
 
-Restart into a downloaded app update (your terminals keep running). Apollo downloads none: new versions are on the Releases page.
+Open the newest Apollo release on the Releases page to download it. Apollo never installs itself.
 
 No arguments.
 

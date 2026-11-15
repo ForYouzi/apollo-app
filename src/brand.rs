@@ -15,6 +15,8 @@ pub const BUNDLE_ID: &str = "com.foryouzi.apollo";
 pub const APP_ID: &str = "apollo-app";
 pub const BUNDLE: &str = "Apollo.app";
 pub const EXECUTABLE: &str = "Apollo";
+/// Where Apollo's releases are: the update check asks GitHub for its latest one.
+pub const GITHUB_REPO: &str = "ForYouzi/apollo-app";
 pub const RELEASES_PAGE: &str = "https://github.com/ForYouzi/apollo-app/releases";
 
 #[cfg(test)]
@@ -25,6 +27,7 @@ mod tests {
     fn brand_names() {
         assert_eq!((NAME, BUNDLE_ID, APP_ID, BUNDLE, EXECUTABLE), ("Apollo", "com.foryouzi.apollo", "apollo-app", "Apollo.app", "Apollo"));
         assert_eq!(name!(), NAME);
+        assert_eq!(RELEASES_PAGE, format!("https://github.com/{GITHUB_REPO}/releases"));
         assert!(crate::HELP.starts_with("herdr-app: the Apollo desktop app. With no arguments"), "{}", crate::HELP);
     }
 
