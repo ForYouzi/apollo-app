@@ -1,6 +1,6 @@
 [workspace]
 members = ["crates/ghostty-sys"]
-exclude = ["vendor/gpui-kit", "vendor/gpui-pre", "vendor/gpui-pre-wgpu", "vendor/gpui-pre-apple", "vendor/gpui-pre-linux", "vendor/gpui-pre-macos", "vendor/gpui-pre-windows", "vendor/taffy", "vendor/quickjs-jit-runtime", "vendor/zed-xim", "vendor/xim-ctext"]
+exclude = ["vendor/gpui-kit", "vendor/gpui-pre", "vendor/gpui-pre-wgpu", "vendor/gpui-pre-apple", "vendor/gpui-pre-linux", "vendor/gpui-pre-macos", "vendor/gpui-pre-windows", "vendor/taffy", "vendor/quickjs-jit-runtime", "vendor/quickjs-jit-sys", "vendor/zed-xim", "vendor/xim-ctext"]
 resolver = "2"
 
 [workspace.package]
@@ -93,6 +93,10 @@ taffy = { path = "vendor/taffy" }
 # object-returning functions (longbridge/quickjs-jit#38, HERDR:).
 [patch."https://github.com/longbridge/quickjs-jit"]
 quickjs-jit-runtime = { path = "vendor/quickjs-jit-runtime" }
+# Our copy: a suspended async function reachable only through a closure over
+# one of its locals was freed while live, and resuming it crashed (#20). The
+# quickjs-ng 7955cfd fix is patches/0033-coroutine-varref-gc.patch (APOLLO:).
+quickjs-jit-sys = { path = "vendor/quickjs-jit-sys" }
 
 # With --target (CI builds Intel Macs on Apple Silicon), stripping a macOS
 # proc-macro loses what rustc loads from it: "can't find crate". Build-time
