@@ -60,7 +60,7 @@ static CHECKING: AtomicBool = AtomicBool::new(false);
 
 /// A newer Apollo than this one, if the last check found one.
 pub fn latest() -> Option<AppRelease> {
-    newer_release(LATEST.lock().unwrap().clone(), env!("CARGO_PKG_VERSION"))
+    newer_release(LATEST.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone(), env!("CARGO_PKG_VERSION"))
 }
 
 /// `release`, if it is newer than `running`.
@@ -69,11 +69,11 @@ fn newer_release(release: Option<AppRelease>, running: &str) -> Option<AppReleas
 }
 
 pub fn core() -> CoreInfo {
-    CORE.lock().unwrap().clone()
+    CORE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
 }
 
 pub fn set_core(version: Option<String>, managed: Option<String>) {
-    let mut c = CORE.lock().unwrap();
+    let mut c = CORE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if version.is_some() {
         c.version = version;
     }
@@ -115,7 +115,7 @@ pub fn status() -> serde_json::Value {
         },
         "notes": crate::update_notes::notes(None),
         "core": core(),
-        "checked": *CHECKED.lock().unwrap(),
+        "checked": *CHECKED.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
         "checks": RUNNING.load(Ordering::Relaxed),
         "checking": CHECKING.load(Ordering::Relaxed),
     })
@@ -125,13 +125,13 @@ pub fn check_now() {
     if RUNNING.load(Ordering::Relaxed) {
         CHECKING.store(true, Ordering::Relaxed);
     }
-    *WAKE.0.lock().unwrap() = true;
+    *WAKE.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = true;
     WAKE.1.notify_all();
 }
 
 fn sleep(d: Duration) {
-    let woken = WAKE.0.lock().unwrap();
-    let (mut woken, _) = WAKE.1.wait_timeout_while(woken, d, |w| !*w).unwrap();
+    let woken = WAKE.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (mut woken, _) = WAKE.1.wait_timeout_while(woken, d, |w| !*w).unwrap_or_else(std::sync::PoisonError::into_inner);
     *woken = false;
 }
 
@@ -154,7 +154,7 @@ pub fn start() {
             CHECKING.store(true, Ordering::Relaxed);
             let succeeded = check_pass(&products, &github(), &releases(), &CORE);
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-            *CHECKED.lock().unwrap() = checked_at(succeeded, now);
+            *CHECKED.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = checked_at(succeeded, now);
             CHECKING.store(false, Ordering::Relaxed);
             sleep(if succeeded { EVERY } else { RETRY });
         }
@@ -167,7 +167,7 @@ fn check_pass(products: &[Product], github: &str, releases: &str, core: &Mutex<C
     let mut succeeded = true;
     if products.contains(&Product::App) {
         match latest_app_from(github) {
-            Ok(found) => *LATEST.lock().unwrap() = found,
+            Ok(found) => *LATEST.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = found,
             Err(e) => {
                 tracing::warn!("{} release check: {e}", crate::brand::NAME);
                 succeeded = false;
@@ -215,11 +215,11 @@ fn parse_latest(json: &serde_json::Value) -> Option<AppRelease> {
 
 /// Looks for a newer core of this app's generation.
 fn check_core(releases: &str, core: &Mutex<CoreInfo>) -> Result<(), String> {
-    let have = core.lock().unwrap().version.clone();
+    let have = core.lock().unwrap_or_else(std::sync::PoisonError::into_inner).version.clone();
     let Some(have) = have else { return Ok(()) };
     let latest = latest_core_from(releases)?;
     let same = latest.generation == Some(crate::hc::GENERATION);
-    core.lock().unwrap().ready = (same && newer(&latest.version, &have)).then_some(latest.version);
+    core.lock().unwrap_or_else(std::sync::PoisonError::into_inner).ready = (same && newer(&latest.version, &have)).then_some(latest.version);
     Ok(())
 }
 
@@ -237,7 +237,7 @@ fn latest_core_from(releases: &str) -> Result<CoreRelease, String> {
 /// `hc update` (terminals keep running; the app reconnects when the core restarts).
 pub fn update_core() {
     {
-        let mut c = CORE.lock().unwrap();
+        let mut c = CORE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if c.updating || c.managed.is_some() {
             return;
         }
@@ -246,7 +246,7 @@ pub fn update_core() {
     }
     std::thread::spawn(|| {
         let result = crate::core_bin::update();
-        let mut c = CORE.lock().unwrap();
+        let mut c = CORE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         c.updating = false;
         match result {
             Ok(now) => {

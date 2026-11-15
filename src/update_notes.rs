@@ -116,7 +116,7 @@ fn save(record: &Record) {
 
 /// Called once the live window has connected and synchronized successfully.
 pub fn started(first_install: bool) {
-    let mut launch = LAUNCH.lock().unwrap();
+    let mut launch = LAUNCH.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if launch.is_some() { return; }
     let record = std::fs::read(path("update-notes.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
     let state = Launch::new(record, env!("CARGO_PKG_VERSION"), first_install);
@@ -178,7 +178,7 @@ fn fetch_media(notes: &[Note]) {
         if result.is_ok_and(|out| out.status.success())
             && std::fs::rename(&temp, &file).is_ok()
         {
-            MEDIA.lock().unwrap().0.remove(&file);
+            MEDIA.lock().unwrap_or_else(std::sync::PoisonError::into_inner).0.remove(&file);
         }
         let _ = std::fs::remove_file(temp);
     }
@@ -210,28 +210,28 @@ pub fn notes(target: Option<&str>) -> Vec<Note> {
                 if preview {
                     cached_media(&file, &root)
                 } else {
-                    MEDIA.lock().unwrap().get(&file, &root)
+                    MEDIA.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&file, &root)
                 }
             }).collect();
         }
     }
-    LAUNCH.lock().unwrap().as_ref().map(|l| l.range(&notes, target)).unwrap_or_default()
+    LAUNCH.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref().map(|l| l.range(&notes, target)).unwrap_or_default()
 }
 
 pub fn spotlights() -> Vec<Note> {
     let notes = notes(None);
-    let launch = LAUNCH.lock().unwrap();
+    let launch = LAUNCH.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(l) = launch.as_ref().filter(|l| l.changed) else { return Vec::new() };
     notes.into_iter().filter(|n| n.spotlight && !l.record.presented.contains(&n.version)).collect()
 }
 
 pub fn changed() -> bool {
-    LAUNCH.lock().unwrap().as_ref().is_some_and(|l| l.changed)
+    LAUNCH.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref().is_some_and(|l| l.changed)
 }
 
 pub fn presented(versions: &[String]) {
     let known = all();
-    if let Some(l) = LAUNCH.lock().unwrap().as_mut() {
+    if let Some(l) = LAUNCH.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_mut() {
         for version in versions {
             if known.iter().any(|n| n.version == *version && n.spotlight) && !l.record.presented.contains(version) {
                 l.record.presented.push(version.clone());
