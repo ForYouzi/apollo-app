@@ -1,5 +1,16 @@
 # Apollo changelog
 
+## [0.0.7] - 2026-11-15
+
+Takes Herdr 0.1.16 and its later changes up to 257086e (entries below for 0.1.16): Dock icon badges for mods, mods can read a pane's scroll position, `tab.move` can step left or right, zooming a pane gives it the keyboard, the agents rail marks the focused agent, Empryo as a built-in program, and agents start under `sh` for shells like nushell. (#25)
+
+### New
+- **Apollo tells you when a new version is out.** A release build checks GitHub for the latest Apollo release every hour; a newer one shows "Apollo x.y.z is out" with Download in the corner, in Settings → Updates and as a dot by Settings. Download opens the release page. (#19)
+
+### Fixed
+- **A crash after Apollo had been open for a while is gone.** A mod task waiting in `await` and woken by a timer could be freed by the JavaScript engine's garbage collector while still in use, and resuming it crashed Apollo. The engine now keeps such tasks alive (quickjs-ng 7955cfd). (#20, #24)
+- **Herdr's self-update is gone.** It was switched off but still ran at start and on quit, and it read a marker a Herdr update leaves in the shared settings folder, then forced a herdr-core update. Apollo never installs itself; herdr-core still updates as before. What's new shows Apollo's notes only. (#19, #21)
+
 ## [0.0.6] - 2026-11-13
 
 Takes Herdr 0.1.15 and its later changes up to b67715e: terminal font weight (`font_weight`, default 500, the same Medium weight as before) and cell width settings, a folder for new worktrees, tab names that follow their agent's session title, middle-click paste of the selection on Linux, and smoother tab bar scrolling. (#17)
