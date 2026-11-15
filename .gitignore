@@ -2,3 +2,5 @@
 /dist
 /.brain
 /AGENTS.local.md
+# Written by the QuickJS patch tests (a standalone crate).
+/vendor/quickjs-jit-sys/Cargo.lock

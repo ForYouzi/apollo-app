@@ -119,6 +119,11 @@ jobs:
       - name: Windows renderer tests (WARP)
         if: runner.os == 'Windows'
         run: cargo test --locked --config 'profile.dev.package."*".opt-level=0' -p gpui-pre-windows --lib
+      # Our QuickJS copy is outside the workspace too: its patch-set tests and
+      # the coroutine GC regression (#20, AddressSanitizer with clang).
+      - name: QuickJS patch tests
+        if: runner.os != 'Windows'
+        run: cargo test --features jit-abi --manifest-path vendor/quickjs-jit-sys/Cargo.toml
       # Windows runners lack an interactive desktop and the Intel macOS runner
       # has no Metal GPU. Linux uses headless Vulkan in the suite above; Apple
       # silicon macOS exercises the native window renderer here.
