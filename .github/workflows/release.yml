@@ -96,4 +96,4 @@ jobs:
       - env: { GH_TOKEN: "${{ github.token }}" }
         run: |
           kind=--latest; [[ "$GITHUB_REF_NAME" == *-* ]] && kind=--prerelease
-          gh release create "$GITHUB_REF_NAME" dist/apollo-app-*.zip dist/SHA256SUMS --repo "$GITHUB_REPOSITORY" --verify-tag "$kind" --title "Apollo ${GITHUB_REF_NAME#v}" --notes "Apollo ${GITHUB_REF_NAME#v}. macOS builds are ad-hoc signed; see README for first launch."
+          gh release create "$GITHUB_REF_NAME" dist/apollo-app-*.zip dist/SHA256SUMS --repo "$GITHUB_REPOSITORY" --verify-tag "$kind" --title "Apollo ${GITHUB_REF_NAME#v}" --notes "Apollo ${GITHUB_REF_NAME#v}. macOS builds are ad-hoc signed; see https://github.com/ForYouzi/apollo-app/wiki/Install for first launch."
