@@ -113,8 +113,11 @@ pub fn shell() -> String {
 fn unix_agent_argv(sh: String, cmd: Vec<String>, login: bool) -> Vec<String> {
     let name = std::path::Path::new(&sh).file_name().and_then(|s| s.to_str());
     if !matches!(name, Some("sh" | "bash" | "zsh" | "dash" | "ksh" | "fish")) {
-        // Other shells cannot parse our wrapper; return to the person's shell after the command.
-        let mut run = vec!["/bin/sh".into(), "-c".into(), "\"$@\"; exec \"$0\" -i".into(), sh];
+        // Other shells cannot parse our wrapper: sh runs the command on the app's PATH, which the
+        // installed check searches when the shell can't run it (`programs::installed_here`),
+        // then the person's shell takes over.
+        let path = std::env::var("PATH").map(|p| format!("PATH='{}' ", p.replace('\'', "'\\''"))).unwrap_or_default();
+        let mut run = vec!["/bin/sh".into(), "-c".into(), format!("{path}\"$@\"; exec \"$0\" -i"), sh];
         run.extend(cmd);
         return run;
     }
@@ -648,6 +651,30 @@ impl AppWindow {
         }
         w._tasks.push(cx.spawn_in(window, async move |this, cx| {
             while let Ok(req) = requests.recv().await {
+                let req = match req {
+                    Request::Control { cmd, reply } => {
+                        if let Some(path) = cmd.get("shot").and_then(Value::as_str) {
+                            if this.upgrade().is_none() {
+                                break;
+                            }
+                            (**cx).update(crate::terminal::flush_output_clock);
+                            let body = match crate::control::save_shot(
+                                cx.window_handle(),
+                                cx,
+                                std::path::Path::new(path),
+                            ) {
+                                Ok(()) => json!({ "path": path }),
+                                Err(error) => {
+                                    json!({ "error": format!("cannot save screenshot: {error:#}") })
+                                }
+                            };
+                            let _ = reply.send(body);
+                            continue;
+                        }
+                        Request::Control { cmd, reply }
+                    }
+                    other => other,
+                };
                 if this.update_in(cx, |this, window, cx| this.handle(req, window, cx)).is_err() {
                     break;
                 }
@@ -1471,10 +1498,15 @@ impl AppWindow {
             let size_hint = (dim("cols", 120), dim("rows", 40));
             let view = cx.new(|cx| TerminalView::attach(self.core.clone(), address.clone(), size_hint, cx));
             self.tell_term(&view, &address, cx);
+            mods::track_pane_view(id.clone(), &view);
             let (block, addr) = (id.clone(), address.clone());
             let sub = cx.subscribe_in(&view, window, move |this, _, ev: &TerminalEvent, window, cx| match ev {
                 TerminalEvent::Peek(address) => this.peek_terminal(address, window, cx),
                 TerminalEvent::TitleChanged => this.publish(cx),
+                TerminalEvent::ScrollChanged => {
+                    mods::panes_scrolled();
+                    this.refresh_snapshot_mods(cx);
+                }
                 TerminalEvent::SelectionChanged => this.publish_selection(&addr, window, cx),
                 TerminalEvent::Ended => this.terminal_ended(&block, window, cx),
                 TerminalEvent::ContextMenu(at) => {
@@ -1734,7 +1766,6 @@ impl AppWindow {
         };
         copy.id = mods::prepare_load(&copy.inst);
         self.mod_stamps.borrow_mut().entry(copy.inst.name.clone()).or_insert_with(|| crate::files::mod_stamp(&folder.dir));
-        let near_limit = runtime.memory_share() >= RESTART_MODS_AT;
         match runtime.try_load(&folder.dir, window, cx) {
             Ok(root) => {
                 if self.file_events.is_none() {
@@ -1745,7 +1776,7 @@ impl AppWindow {
             Err(e) => {
                 tracing::warn!("mod {} failed to load: {e:#}", copy.inst.name);
                 copy.error = Some(format!("{e:#}"));
-                if !self.restarting_mods && (near_limit || runtime.memory_share() >= RESTART_MODS_AT || out_of_memory(&e)) {
+                if !self.restarting_mods && (out_of_memory(&e) || runtime.memory_share() >= RESTART_MODS_AT) {
                     // Finish mounting before retrying all copies. Other failures on
                     // this VM must not restart the replacement again.
                     let failed = Rc::downgrade(runtime);
@@ -3068,8 +3099,13 @@ impl AppWindow {
                 c.name = name.trim().to_owned();
             }
             "tab.move" => {
-                let (Some(id), Some(i)) = (Self::arg(a, "id"), a.get("index").and_then(Value::as_u64)) else { return self.fail("tab.move needs id and index") };
-                if !self.model.move_tab(id, i as usize) { return self.fail(format!("no tab {id:?}")); }
+                let Some(id) = Self::owned(a, "id").or(active_ctx) else { return self.fail("no tab") };
+                let moved = match (a.get("index").and_then(Value::as_u64), a.get("by").and_then(Value::as_i64)) {
+                    (Some(i), None) => self.model.move_tab(&id, i as usize),
+                    (None, Some(by)) => self.model.shift_tab(&id, by),
+                    _ => return self.fail("tab.move needs index or by"),
+                };
+                if !moved { return self.fail(format!("no tab {id:?}")); }
             }
             "tab.settle" | "tab.unsettle" => {
                 let Some(id) = Self::owned(a, "id").or(active_ctx) else { return self.fail("no tab") };
@@ -3127,13 +3163,8 @@ impl AppWindow {
                 self.kill(&addr.into_iter().collect::<Vec<_>>(), cx);
             }
             "pane.zoom" => {
-                let pane = Self::owned(a, "pane").or_else(|| self.model.focused_pane());
-                if let Some(pane) = pane
-                    && let Some(ctx) = self.model.tab_of(&pane).map(|c| c.id.clone())
-                    && let Some(c) = self.model.tab_mut(&ctx)
-                    && c.root.panes().len() > 1
-                {
-                    c.zoomed = if c.zoomed.as_deref() == Some(pane.as_str()) { None } else { Some(pane) };
+                if let Some(pane) = Self::owned(a, "pane").or_else(|| self.model.focused_pane()) {
+                    self.model.toggle_zoom(&pane);
                 }
             }
             "pane.focus" => {
@@ -3872,6 +3903,7 @@ impl AppWindow {
             Request::OpenOverlay { id, spec } => self.open_overlay(id, spec, window, cx),
             Request::CloseOverlay { id } => self.close_overlay(&id, window, cx),
             Request::SetWindowTitle(title) => window.set_window_title(title.as_deref().unwrap_or(crate::brand::NAME)),
+            Request::SetBadge(text) => crate::badge::set(text.as_deref()),
             Request::Refresh => self.refresh_mods(cx),
             Request::Control { cmd, reply } => {
                 let _ = reply.send(self.control(cmd, window, cx));
@@ -3883,12 +3915,6 @@ impl AppWindow {
         if let Some(name) = cmd.get("do").and_then(Value::as_str) {
             let args = cmd.get("args").cloned().unwrap_or(Value::Null);
             return self.run_as(name, args, false, window, cx);
-        }
-        if let Some(path) = cmd.get("shot").and_then(Value::as_str) {
-            return match crate::control::save_shot(window, std::path::Path::new(path)) {
-                Ok(()) => json!({ "path": path }),
-                Err(error) => json!({ "error": format!("cannot save screenshot: {error:#}") }),
-            };
         }
         if cmd.get("commands").is_some() {
             return crate::commands::listing();
@@ -5771,7 +5797,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn other_shells_run_the_command_then_return_to_the_shell() {
+    fn other_shells_run_the_command_on_the_app_path_then_return_to_the_shell() {
         use std::os::unix::fs::PermissionsExt;
         let temp = if cfg!(target_os = "linux") { std::path::PathBuf::from("/var/tmp") } else { std::env::temp_dir() };
         let dir = temp.join(format!("herdr-other-shell-test-{}", std::process::id()));
@@ -5781,10 +5807,11 @@ mod tests {
         std::fs::write(&nu, "#!/bin/sh\nprintf 'shell:%s\\n' \"$@\"\n").unwrap();
         std::fs::set_permissions(&nu, std::fs::Permissions::from_mode(0o755)).unwrap();
         let task = "a 'quoted' task; $(not-a-command)\nnext line";
-        let cmd = vec!["printf".to_owned(), "[%s]\n".to_owned(), task.to_owned(), "".to_owned()];
+        // `env` is found only on this PATH, not on the PATH the terminal starts with.
+        let cmd = vec!["env".to_owned(), "printf".to_owned(), "[%s]\n".to_owned(), task.to_owned(), "".to_owned()];
         for login in [false, true] {
             let run = super::unix_agent_argv(nu.to_string_lossy().into(), cmd.clone(), login);
-            let out = std::process::Command::new(&run[0]).args(&run[1..]).output().unwrap();
+            let out = std::process::Command::new(&run[0]).args(&run[1..]).env("PATH", "/nonexistent").output().unwrap();
             assert_eq!(String::from_utf8(out.stdout).unwrap(), format!("[{task}]\n[]\nshell:-i\n"));
         }
         std::fs::remove_dir_all(&dir).unwrap();
@@ -6875,6 +6902,43 @@ export default class Probe extends View {
     }
 
     include!("window/pane_size_tests.rs");
+
+    /// What a `{"command":"tab.move","args":{"by":-1}}` key runs.
+    #[test]
+    fn tab_move_by_steps_the_active_tab() {
+        in_own_process("tab_move_by");
+    }
+
+    #[gpui::test]
+    fn tab_move_by(cx: &mut gpui::TestAppContext) {
+        use serde_json::json;
+        if !running_alone("tab_move_by") { return; }
+        let (view, cx) = open_window(cx, "unused", "", json!({
+            "id": "context", "type": "block", "content": { "tab": "active" }
+        }));
+        let order = |this: &super::AppWindow|this.model.active_space().unwrap().tabs.iter().map(|c| c.id.clone()).collect::<Vec<_>>();
+        view.update_in(cx, |this, window, cx| {
+            this.model.add_space("space", "test", "/", super::Tab::new("t1", "", "a", "term-a"));
+            this.model.add_tab_unselected("space", super::Tab::new("t2", "", "b", "term-b"));
+            this.model.add_tab_unselected("space", super::Tab::new("t3", "", "c", "term-c"));
+            this.documents.entry(String::new()).or_default().available = true;
+            this.sync(window, cx);
+            for (by, expected) in [(1, ["t2", "t1", "t3"]), (1, ["t2", "t3", "t1"]), (1, ["t1", "t2", "t3"]), (-1, ["t2", "t3", "t1"])] {
+                let out = this.run_as("tab.move", json!({ "by": by }), false, window, cx);
+                assert!(out.get("error").is_none(), "{out}");
+                assert_eq!(order(this), expected, "by {by}");
+                assert_eq!(this.model.active_tab().unwrap().id, "t1");
+            }
+            let out = this.run_as("tab.move", json!({ "index": 1 }), false, window, cx);
+            assert!(out.get("error").is_none(), "{out}");
+            assert_eq!(order(this), ["t1", "t2", "t3"]);
+            for args in [json!({}), json!({ "index": 1, "by": 1 })] {
+                let out = this.run_as("tab.move", args.clone(), false, window, cx);
+                assert!(out.get("error").is_some(), "{args}: {out}");
+                assert_eq!(order(this), ["t1", "t2", "t3"]);
+            }
+        });
+    }
 
     #[test]
     fn directional_navigation_moves_zoom_and_keyboard_focus() {

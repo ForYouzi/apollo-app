@@ -3,7 +3,7 @@ Herdr third-party notices
 Regenerate with just notices. See licenses/README.md.
 
 Input-SHA256: c0570c1b1ebd700456c3fad72d51b6ec81ebd791159c4f700b0695387d49c9b4 Cargo.lock
-Input-SHA256: 0730a846fc7f093ff0bbbba0507f5310fc3a266aa02ec390919fdacb0c15228a Cargo.toml
+Input-SHA256: e2b49edce7e8308cac6e69df4646e710917de094fc6e571002998ab2b3f40977 Cargo.toml
 Input-SHA256: c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4 LICENSE
 Input-SHA256: e58cb0de2dde300bcda769ca993fde2737f42c0274082f038621ab22975a49e2 about.toml
 Input-SHA256: 84a7a98c82140fb12c37fe42b93805baa16024cb3e5acc599b7ffe612c55d847 assets/fonts/LICENSE-SymbolsNerdFont.txt
