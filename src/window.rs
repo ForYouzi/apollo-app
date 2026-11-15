@@ -5971,6 +5971,83 @@ mod tests {
         (view, cx)
     }
 
+    /// A mod whose long-lived task waits on a promise it resolves itself from a
+    /// timer (`wake = resolve`), the pattern the user's apollo-* mods use, plus
+    /// short async waits on a timer.
+    const SUSPENDED_MOD: &str = r#"import { View, div } from "gpui-kit";
+import { setShared, updates } from "herdr";
+export default class Suspended extends View {
+  init(_props, cx) {
+    this.n = 0;
+    let wake = null;
+    cx.timer.every(5, () => { const w = wake; wake = null; if (w) w(); });
+    // Reported from a timer, not render: writing shared state re-renders every copy.
+    cx.timer.every(50, () => { setShared("stress.renders", globalThis.__stress ?? 0); setShared("stress.resumes", this.n); });
+    // As Settings does: read the update status while it changes.
+    cx.timer.every(3, () => { this.u = updates(); });
+    cx.timer.every(7, (cx) => cx.spawn(async (cx) => { await cx.sleep(1); this.n += 1; cx.notify(); }));
+    cx.spawn(async (cx) => {
+      for (;;) {
+        const found = [{ k: 1 }, { k: 2 }, { k: 3 }].find((o) => o.k === (this.n % 3) + 1);
+        await new Promise((resolve) => { wake = resolve; });
+        this.last = found;
+        cx.notify();
+      }
+    });
+  }
+  render() { globalThis.__stress = (globalThis.__stress ?? 0) + 1; return div().child(String(this.n)); }
+}
+"#;
+
+    #[test]
+    #[ignore = "stress: two days of update refreshes, reloads and VM moves over a suspended await"]
+    fn suspended_awaits_survive_refreshes_reloads_and_new_vms() {
+        in_own_process("suspended_await_stress");
+    }
+
+    /// The crash in #20 is a stale value freed as an async function resumes.
+    /// The update checker's only effect on mods is `refresh_mods` (when the
+    /// status changes); a reload or a new VM also tears tasks down. Drive all
+    /// three over a mod suspended in `await` many times and let the timers resume it.
+    #[gpui::test]
+    fn suspended_await_stress(cx: &mut gpui::TestAppContext) {
+        if !running_alone("suspended_await_stress") {
+            return;
+        }
+        let (view, cx) = open_window(cx, "suspended", SUSPENDED_MOD, serde_json::json!({ "id": "s", "type": "block", "content": { "mod": "suspended" } }));
+        cx.run_until_parked();
+        let main = crate::mods::app_dir().join("mods/suspended/main.js");
+        let rounds: usize = std::env::var("HERDR_STRESS_ROUNDS").ok().and_then(|n| n.parse().ok()).unwrap_or(400);
+        for round in 0..rounds {
+            // The hourly check changing the status: every copy re-renders.
+            view.update(cx, |this, cx| this.refresh_mods(cx));
+            cx.executor().advance_clock(std::time::Duration::from_millis(13));
+            cx.run_until_parked();
+            if round % 7 == 0 {
+                // A mod edit: the copy reloads over its suspended task.
+                std::fs::write(&main, format!("{SUSPENDED_MOD}\n// {round}\n")).unwrap();
+                cx.update(|window, cx| view.update(cx, |this, cx| this.files_changed(vec!["mods/suspended/main.js".into()], window, cx)));
+            }
+            if round % 50 == 49 {
+                // A new VM while tasks of the old one are suspended.
+                cx.update(|window, cx| view.update(cx, |this, cx| { this.restart_mods(window, cx); }));
+            }
+            cx.executor().advance_clock(std::time::Duration::from_millis(17));
+            cx.run_until_parked();
+        }
+        let (mounted, errors): (usize, Vec<String>) = view.update(cx, |this, _| (
+            this.copies.values().filter(|c| c.root.is_some()).count(),
+            this.copies.values().filter_map(|c| c.error.clone()).collect(),
+        ));
+        assert_eq!((mounted, errors), (1, vec![]));
+        let count = |key: &str| crate::mods::shared(key).and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let (renders, resumes) = (count("stress.renders"), count("stress.resumes"));
+        eprintln!("suspended_await_stress: {renders} renders, {resumes} resumes in the last copy");
+        // Counters live in the VM, so a new VM starts them again: the last copy still
+        // rendering and resuming is the proof it survived (a crash ends the process).
+        assert!(renders > 0.0 && resumes > 0.0, "the mod kept running: {renders} renders, {resumes} resumes");
+    }
+
     #[test]
     fn repeated_mod_edits_start_a_new_vm_before_the_old_one_fills() {
         in_own_process("edits_restart_full_vm");
