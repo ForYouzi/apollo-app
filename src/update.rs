@@ -68,6 +68,11 @@ pub fn download_page(latest: Option<AppRelease>) -> String {
     latest.map_or_else(|| crate::brand::RELEASES_PAGE.to_owned(), |r| r.url)
 }
 
+/// `app.update`: opens the download page and nothing else (no download, no restart).
+pub fn open_download(opener: &dyn crate::links::Opener, latest: Option<AppRelease>) {
+    opener.open_url(&download_page(latest));
+}
+
 /// `release`, if it is newer than `running`.
 fn newer_release(release: Option<AppRelease>, running: &str) -> Option<AppRelease> {
     release.filter(|r| newer(&r.version, running))
@@ -375,6 +380,31 @@ mod tests {
         set_core_in(&core, None, Some("homebrew".into()));
         assert_eq!(core.lock().unwrap().version, None, "an unknown version is reported as unknown");
         assert_eq!(core.lock().unwrap().ready.as_deref(), Some("0.1.21"));
+    }
+
+    /// Records what `app.update` asked the system to do.
+    #[derive(Default)]
+    struct Recorder(std::cell::RefCell<Vec<String>>);
+    impl crate::links::Opener for Recorder {
+        fn reveal(&self, item: &std::path::Path) -> std::io::Result<()> {
+            self.0.borrow_mut().push(format!("reveal {}", item.display()));
+            Ok(())
+        }
+        fn open_folder(&self, dir: &std::path::Path) {
+            self.0.borrow_mut().push(format!("folder {}", dir.display()));
+        }
+        fn open_url(&self, url: &str) {
+            self.0.borrow_mut().push(format!("url {url}"));
+        }
+    }
+
+    #[test]
+    fn app_update_only_opens_the_download_page() {
+        let page = format!("{}/tag/v9.9.9", crate::brand::RELEASES_PAGE);
+        let opened = Recorder::default();
+        open_download(&opened, Some(AppRelease { version: "9.9.9".into(), url: page.clone() }));
+        open_download(&opened, None);
+        assert_eq!(*opened.0.borrow(), [format!("url {page}"), format!("url {}", crate::brand::RELEASES_PAGE)]);
     }
 
     #[test]
