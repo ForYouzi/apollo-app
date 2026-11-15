@@ -97,7 +97,6 @@ impl Launch {
 }
 
 static LAUNCH: Mutex<Option<Launch>> = Mutex::new(None);
-static FETCHED: Mutex<Option<Vec<Note>>> = Mutex::new(None);
 static MEDIA: LazyLock<Mutex<MediaCache>> = LazyLock::new(|| Mutex::new(MediaCache::default()));
 
 fn path(name: &str) -> std::path::PathBuf {
@@ -117,7 +116,7 @@ fn save(record: &Record) {
 
 /// Called once the live window has connected and synchronized successfully.
 pub fn started(first_install: bool) {
-    let mut launch = LAUNCH.lock().unwrap();
+    let mut launch = LAUNCH.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if launch.is_some() { return; }
     let record = std::fs::read(path("update-notes.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
     let state = Launch::new(record, env!("CARGO_PKG_VERSION"), first_install);
@@ -126,29 +125,10 @@ pub fn started(first_install: bool) {
     std::thread::spawn(|| fetch_media(&all()));
 }
 
-pub fn cache(text: &str) {
-    let notes = parse(text);
-    if notes.is_empty() { return; }
-    *FETCHED.lock().unwrap() = Some(notes.clone());
-    std::thread::spawn(move || fetch_media(&notes));
-    if let Err(e) = std::fs::write(path("update-notes-cache.md"), text) {
-        tracing::warn!("update notes cache: {e}");
-    }
-}
-
-pub fn has(version: &str) -> bool {
-    all().iter().any(|note| note.version == version)
-}
-
+/// Apollo's notes: its own CHANGELOG only. `update-notes-cache.md` in the shared
+/// folder holds Herdr's release notes (Herdr writes it), never Apollo's.
 fn all() -> Vec<Note> {
     let mut notes = parse(include_str!("../CHANGELOG.md"));
-    let fetched = FETCHED.lock().unwrap().get_or_insert_with(|| {
-        std::fs::read_to_string(path("update-notes-cache.md")).map(|s| parse(&s)).unwrap_or_default()
-    }).clone();
-    // The running binary's curated notes win over cached copies of its releases.
-    for note in fetched {
-        if !notes.iter().any(|n| n.version == note.version) { notes.push(note); }
-    }
     notes.sort_by(|a, b| if crate::update::newer(&a.version, &b.version) { std::cmp::Ordering::Less } else if crate::update::newer(&b.version, &a.version) { std::cmp::Ordering::Greater } else { std::cmp::Ordering::Equal });
     notes
 }
@@ -198,7 +178,7 @@ fn fetch_media(notes: &[Note]) {
         if result.is_ok_and(|out| out.status.success())
             && std::fs::rename(&temp, &file).is_ok()
         {
-            MEDIA.lock().unwrap().0.remove(&file);
+            MEDIA.lock().unwrap_or_else(std::sync::PoisonError::into_inner).0.remove(&file);
         }
         let _ = std::fs::remove_file(temp);
     }
@@ -230,28 +210,28 @@ pub fn notes(target: Option<&str>) -> Vec<Note> {
                 if preview {
                     cached_media(&file, &root)
                 } else {
-                    MEDIA.lock().unwrap().get(&file, &root)
+                    MEDIA.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&file, &root)
                 }
             }).collect();
         }
     }
-    LAUNCH.lock().unwrap().as_ref().map(|l| l.range(&notes, target)).unwrap_or_default()
+    LAUNCH.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref().map(|l| l.range(&notes, target)).unwrap_or_default()
 }
 
 pub fn spotlights() -> Vec<Note> {
     let notes = notes(None);
-    let launch = LAUNCH.lock().unwrap();
+    let launch = LAUNCH.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(l) = launch.as_ref().filter(|l| l.changed) else { return Vec::new() };
     notes.into_iter().filter(|n| n.spotlight && !l.record.presented.contains(&n.version)).collect()
 }
 
 pub fn changed() -> bool {
-    LAUNCH.lock().unwrap().as_ref().is_some_and(|l| l.changed)
+    LAUNCH.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref().is_some_and(|l| l.changed)
 }
 
 pub fn presented(versions: &[String]) {
     let known = all();
-    if let Some(l) = LAUNCH.lock().unwrap().as_mut() {
+    if let Some(l) = LAUNCH.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_mut() {
         for version in versions {
             if known.iter().any(|n| n.version == *version && n.spotlight) && !l.record.presented.contains(version) {
                 l.record.presented.push(version.clone());
@@ -298,16 +278,11 @@ mod tests {
         }
     }
     #[test]
-    fn cached_notes_are_read_once_and_version_specific() {
-        let previous = FETCHED.lock().unwrap().take();
-        all();
-        assert!(FETCHED.lock().unwrap().is_some());
-        *FETCHED.lock().unwrap() = Some(Vec::new());
-        assert!(!has("99.0.0"));
-        *FETCHED.lock().unwrap() = Some(parse("## [99.0.0] - 2026-10-30\n- Test release\n"));
-        assert!(has("99.0.0"));
-        assert!(!has("99.0.1"));
-        *FETCHED.lock().unwrap() = previous;
+    fn notes_are_apollos_changelog_only() {
+        let versions: Vec<String> = all().into_iter().map(|n| n.version).collect();
+        assert!(versions.iter().any(|v| v == env!("CARGO_PKG_VERSION")), "{versions:?}");
+        let changelog = include_str!("../CHANGELOG.md");
+        assert!(versions.iter().all(|v| changelog.contains(&format!("## [{v}]"))), "{versions:?}");
     }
     #[test]
     fn first_install_only_welcomes() {

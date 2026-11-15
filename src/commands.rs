@@ -93,14 +93,14 @@ pub const COMMANDS: &[Command] = &[
     cmd("app.feedback", &[opt("message"), opt("from")], "Draft feedback for the person to review and send (from: person or agent)."),
     cmd("app.palette", &[], "Toggle the command palette: every command by name, with its key; calling again closes it."),
     cmd("app.settings", &[opt("section")], "Open the settings (section: look, alerts, updates)."),
-    cmd("app.check_updates", &[], concat!("Look for a newer herdr-core now. ", crate::brand::name!(), " never updates itself: new versions are on the Releases page.")),
+    cmd("app.check_updates", &[], concat!("Look for a newer herdr-core and ", crate::brand::name!(), " release now. ", crate::brand::name!(), " never updates itself: new versions are on the Releases page.")),
     cmd("app.update_core", &[], "Update herdr-core to its latest release of this generation; terminals keep running."),
     cmd("app.reset", &[], "The escape hatch: set the shown layout and keys aside, back to the default screen."),
     cmd("app.theme", &[req("name")], "Use a theme (a preset or themes/<name>.json)."),
     cmd("app.zoom_in", &[], "Make everything bigger."),
     cmd("app.zoom_out", &[], "Make everything smaller."),
     cmd("app.zoom_reset", &[], "Back to normal size."),
-    cmd("app.update", &[], concat!("Restart into a downloaded app update (your terminals keep running). ", crate::brand::name!(), " downloads none: new versions are on the Releases page.")),
+    cmd("app.update", &[], concat!("Open the newest ", crate::brand::name!(), " release on the Releases page to download it. ", crate::brand::name!(), " never installs itself.")),
     cmd("app.quit", &[], "Quit (macOS)."),
     cmd("app.hide", &[], "Hide the app (macOS)."),
     cmd("app.hide_others", &[], "Hide other apps (macOS)."),
@@ -190,6 +190,7 @@ mod tests {
         }
         let settings = include_str!("../defaults/frame/settings/main.js");
         assert!(!settings.contains("looks for both") && settings.contains("Releases page"));
+        assert!(!settings.contains("Restart to update"), "Apollo never installs itself");
     }
 
     #[test]

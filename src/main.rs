@@ -8,6 +8,7 @@ mod control;
 mod core_bin;
 mod files;
 mod hc;
+mod install_folder;
 mod keys;
 mod layout;
 mod layout_sync;
@@ -124,10 +125,7 @@ fn main() {
         )
         .init();
 
-    update::leave_install_folder();
-    if update::apply_on_startup() {
-        return;
-    }
+    install_folder::leave();
 
     telemetry::clock();
     // A first start sizes the app to the screen and the system's text size.
@@ -151,9 +149,6 @@ fn main() {
     };
     #[cfg(target_os = "macos")]
     core_bin::install_cli_link();
-    if let Ok(core) = &core {
-        update::after_update(core.clone());
-    }
     update::start();
     telemetry::start(settings::telemetry_setting(&person));
     bench::start();
@@ -187,7 +182,6 @@ fn main() {
                 }
                 mods::finish_shared();
                 telemetry::quit();
-                let _ = update::apply();
                 async {}
             })
             .detach();

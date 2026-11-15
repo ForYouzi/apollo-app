@@ -20,8 +20,9 @@ prints the built-in command list even without an open window. Do not launch bare
 signal or restart the person's app or core. A window closing does not kill
 its terminals.
 
-`app.check_updates` checks for a newer herdr-core (Apollo never updates
-itself; new versions are on the Releases page). Settings reports "Up to date"
+`app.check_updates` checks for a newer herdr-core and a newer Apollo release
+on GitHub (Apollo never updates itself; `app.update` opens the release page to
+download it). Settings reports "Up to date"
 only after a successful check; on failure, check the connection and retry.
 Package-managed cores are checked but updated through their package manager.
 Dismiss a core update error with its × or `overlay.close {id:"core-update-error"}`;

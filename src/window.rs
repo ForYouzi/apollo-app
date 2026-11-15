@@ -816,7 +816,7 @@ impl AppWindow {
 
     /// After an update: unseen spotlights. Asked for: the pending range, or this version's notes.
     fn open_whats_new(&mut self, asked: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let notes = if asked { crate::update_notes::notes(crate::update::ready().as_deref()) } else { crate::update_notes::spotlights() };
+        let notes = if asked { crate::update_notes::notes(None) } else { crate::update_notes::spotlights() };
         if notes.is_empty() {
             self.run("app.settings", json!({ "section": "updates" }), window, cx);
             return;
@@ -3550,19 +3550,8 @@ impl AppWindow {
                 self.write_person(|p| p.zoom = zoom, window, cx);
             }
             "app.quit" => cx.quit(),
-            "app.update" => {
-                match crate::update::apply() {
-                    Ok(true) => {}
-                    Ok(false) => return self.fail("no update is ready yet"),
-                    Err(error) => {
-                        let reason = format!("Couldn't replace {}'s files: {error}.", crate::brand::NAME);
-                        return self.fail(if cfg!(windows) { format!("Close {}'s terminals (or restart Windows) and try again. {reason}", crate::brand::NAME) } else { reason });
-                    }
-                }
-                self.drain_documents(window, cx);
-                crate::update::relaunch();
-                cx.quit();
-            }
+            // Apollo never installs itself: the latest release's page, to download it.
+            "app.update" => crate::update::open_download(&crate::links::SystemOpener, crate::update::latest()),
             "window.close" | "window.minimize" | "window.maximize" => return self.window_command(name, window, cx),
             // Hiding apps is macOS's (bound natively there).
             "app.hide" | "app.hide_others" | "app.show_all" => return,
@@ -4672,25 +4661,18 @@ impl AppWindow {
 const UPDATE_PILL_HEIGHT: f32 = 34.0;
 
 impl AppWindow {
-    /// "Herdr 0.2.0 is ready · Restart": the frame's, so no layout or mod can hide it.
+    /// "Apollo 0.2.0 is out · Download": the frame's, so no layout or mod can hide it.
     /// What's waiting, in words: the pill shows it until clicked or dismissed.
     fn update_label() -> Option<String> {
-        let core = crate::update::core();
-        let core = core.ready.filter(|_| !core.updating && core.managed.is_none());
-        match (crate::update::ready(), core) {
-            (Some(a), Some(c)) => Some(format!("{} {a} and herdr-core {c} are ready", crate::brand::NAME)),
-            (Some(a), None) => Some(format!("{} {a} is ready", crate::brand::NAME)),
-            (None, Some(c)) => Some(format!("herdr-core {c} is ready")),
-            (None, None) => None,
-        }
+        update_label_for(crate::update::latest().map(|r| r.version), &crate::update::core())
     }
 
     fn render_update_pill(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let app_version = crate::update::ready();
+        let app_version = crate::update::latest().map(|r| r.version);
         let app_ready = app_version.is_some();
         let success = self.update_ready.is_none() && self.update_success;
         let label = self.update_ready.clone().or_else(|| success.then(|| format!("Updated to {}", env!("CARGO_PKG_VERSION"))))?;
-        let dismissal = app_version.map(|v| format!("app:{v}")).unwrap_or_else(|| label.clone());
+        let dismissal = update_dismissal(app_version.as_deref(), &label);
         if self.update_dismissed.as_ref() == Some(&dismissal) { return None; }
         let pill = div()
             .absolute()
@@ -4712,7 +4694,7 @@ impl AppWindow {
             .child(div().text_color(c("foreground")).child(label.clone()))
             .when(app_ready, |pill| pill.child(
                 div()
-                    .id("update-restart")
+                    .id("update-download")
                     .h(settings::z(24.0))
                     .px(settings::z(10.0))
                     .flex()
@@ -4723,7 +4705,7 @@ impl AppWindow {
                     .text_color(c("accent_foreground"))
                     .font_weight(FontWeight::SEMIBOLD)
                     .hover(|s| s.opacity(0.9))
-                    .child("Restart")
+                    .child("Download")
                     .on_click(cx.listener(|this, _, w, cx| this.run("app.update", json!({}), w, cx))),
             ))
             .child(div().id("update-notes").px(settings::z(6.0)).cursor_pointer().text_color(c("accent"))
@@ -5304,6 +5286,23 @@ fn changed_asset_paths(home: &std::path::Path, changed: &[std::path::PathBuf]) -
     paths.into_iter().collect()
 }
 
+/// What's out, in words: a newer Apollo (a download) and a newer herdr-core (an update).
+fn update_label_for(app: Option<String>, core: &crate::update::CoreInfo) -> Option<String> {
+    let core = core.ready.clone().filter(|_| !core.updating && core.managed.is_none());
+    match (app, core) {
+        (Some(a), Some(c)) => Some(format!("{} {a} is out and herdr-core {c} is ready", crate::brand::NAME)),
+        (Some(a), None) => Some(format!("{} {a} is out", crate::brand::NAME)),
+        (None, Some(c)) => Some(format!("herdr-core {c} is ready")),
+        (None, None) => None,
+    }
+}
+
+/// What dismissing the pill hides: a newer Apollo by its version, so the next
+/// release shows again; anything else by its words.
+fn update_dismissal(app: Option<&str>, label: &str) -> String {
+    app.map(|v| format!("app:{v}")).unwrap_or_else(|| label.to_owned())
+}
+
 fn reconcile_core_update_error(dismissed: &mut Option<String>, core: &crate::update::CoreInfo) {
     if core.error.as_ref().is_some_and(|error| dismissed.as_ref() != Some(error)) || (!core.updating && core.error.is_none()) {
         *dismissed = None;
@@ -5312,6 +5311,24 @@ fn reconcile_core_update_error(dismissed: &mut Option<String>, core: &crate::upd
 
 #[cfg(test)]
 mod tests {
+
+    /// The corner pill: a newer Apollo is a download, never "ready to restart";
+    /// dismissing it hides that version only.
+    #[test]
+    fn the_pill_offers_a_download_and_forgets_dismissals_per_version() {
+        let none = crate::update::CoreInfo::default();
+        let core = crate::update::CoreInfo { ready: Some("0.1.20".into()), ..Default::default() };
+        let managed = crate::update::CoreInfo { managed: Some("homebrew".into()), ..core.clone() };
+        assert_eq!(super::update_label_for(Some("0.0.7".into()), &none).as_deref(), Some("Apollo 0.0.7 is out"));
+        assert_eq!(super::update_label_for(Some("0.0.7".into()), &core).as_deref(), Some("Apollo 0.0.7 is out and herdr-core 0.1.20 is ready"));
+        assert_eq!(super::update_label_for(None, &core).as_deref(), Some("herdr-core 0.1.20 is ready"));
+        assert_eq!(super::update_label_for(None, &managed), None);
+        assert_eq!(super::update_label_for(None, &none), None);
+        let label = "Apollo 0.0.7 is out";
+        assert_eq!(super::update_dismissal(Some("0.0.7"), label), "app:0.0.7");
+        assert_ne!(super::update_dismissal(Some("0.0.8"), label), super::update_dismissal(Some("0.0.7"), label));
+        assert_eq!(super::update_dismissal(None, "herdr-core 0.1.20 is ready"), "herdr-core 0.1.20 is ready");
+    }
     use gpui::{div, point, px, size, Context, IntoElement, Render, TestAppContext, Window};
     use gpui::prelude::*;
 

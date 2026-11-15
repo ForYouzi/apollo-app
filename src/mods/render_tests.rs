@@ -137,7 +137,9 @@ struct Calls {
 /// `app`: "source" (no checks), "apollo" (a release: core checks, never the app), "current", "ready".
 fn updates(app: &str, core: &str) -> Value {
     json!({
-        "app": {"version":"0.1.0", "updates":!matches!(app, "source" | "apollo"), "ready": (app == "ready").then_some("0.1.1")},
+        // Apollo never installs itself: `latest` is a newer release on GitHub, nothing more.
+        "app": {"version":"0.1.0", "updates":false, "ready":null, "latest": (app == "latest").then_some("0.1.1"),
+                "url": if app == "latest" { "https://github.com/ForYouzi/apollo-app/releases/tag/v0.1.1" } else { "https://github.com/ForYouzi/apollo-app/releases" }},
         "core": {"version":"0.1.5", "ready":(core == "ready").then_some("0.1.6"), "managed":(core == "managed").then_some("homebrew"), "error":(core == "error").then_some("offline"), "updating":core == "updating"},
         "checked":1700000000, "checks":app != "source", "checking":false
     })
@@ -501,6 +503,21 @@ fn a_described_mod_leaves_no_folder_behind(cx: &mut TestAppContext) {
     drop(staged);
     cx.run_until_parked();
     assert!(!path.exists(), "left behind: {:?}", std::fs::read_dir(&path).map(|d| d.flatten().map(|e| e.file_name()).collect::<Vec<_>>()));
+}
+
+/// The sidebar's Settings row carries a dot only when a newer Apollo is out
+/// (`app.ready` is always null now: nothing is downloaded).
+#[gpui::test]
+fn settings_row_dots_a_newer_release(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let staged = Staged::new();
+    let mut p = props();
+    p["footer"] = json!(true);
+    let quiet = describe(cx, &staged, "mods/workspace-chrome", true, p.clone(), updates("current", "current"), None).unwrap();
+    let out = describe(cx, &staged, "mods/workspace-chrome", true, p, updates("latest", "current"), None).unwrap();
+    assert!(quiet.contains("settings") && out.contains("settings"), "{quiet}");
+    let dots = |tree: &str| tree.matches(".rounded_full").count();
+    assert_eq!(dots(&out), dots(&quiet) + 1, "a newer release adds one dot:\n{quiet}\n---\n{out}");
 }
 
 #[gpui::test]
@@ -907,7 +924,7 @@ fn settings_sections_and_updates(cx: &mut TestAppContext) {
         p["section"] = json!(section);
         describe(cx, &staged, "frame/settings", true, p, updates("current", "current"), None).unwrap();
     }
-    for app in ["source", "apollo", "current", "ready"] {
+    for app in ["source", "current", "latest"] {
         for core in ["current", "ready", "error", "managed", "updating"] {
             let mut p = props();
             p["section"] = json!("updates");
@@ -919,12 +936,15 @@ fn settings_sections_and_updates(cx: &mut TestAppContext) {
                     "both update buttons must exist: {tree}"
                 );
             }
-            if app == "apollo" {
-                assert!(tree.contains("download new versions from the Releases page") && !tree.contains("check-app"), "apollo/{core}: {tree}");
-                assert!(tree.contains("herdr-core 0.1.5"), "apollo/{core}: the core row is missing: {tree}");
-                if core == "current" {
-                    assert!(tree.contains("check-core") && tree.contains("Up to date"), "apollo/current: core Check now missing: {tree}");
-                }
+            if app == "source" {
+                assert!(tree.contains("new versions are on the Releases page") && !tree.contains("check-app"), "source/{core}: {tree}");
+                assert!(tree.contains("herdr-core 0.1.5"), "source/{core}: the core row is missing: {tree}");
+            }
+            // A newer release is a download, never an install.
+            assert_eq!(tree.contains("st-app-update"), app == "latest", "{app}/{core}: {tree}");
+            assert!(!tree.contains("Restart to update"), "{app}/{core}: {tree}");
+            if app == "latest" {
+                assert!(tree.contains("Apollo 0.1.1 is out") && tree.contains("Download"), "latest/{core}: {tree}");
             }
         }
     }
@@ -1045,7 +1065,7 @@ fn settings_keep_notes_in_the_whats_new_window(cx: &mut TestAppContext) {
         {"version":"1.8.0","date":"2026-10-26","items":[{"headline":"Newest headline","detail":"Newest details","fixed":false,"media":[]},{"headline":"","detail":"Newest fix","fixed":true,"media":[]}],"spotlight":true},
         {"version":"1.7.0","date":"2026-10-25","items":[{"headline":"Older headline","detail":"Older details","fixed":false,"media":[]},{"headline":"Another older headline","detail":"Hidden detail","fixed":false,"media":[]}],"spotlight":true}
     ]);
-    let mut update = updates("ready", "current");
+    let mut update = updates("latest", "current");
     update["notes"] = notes.clone();
     let mut p = props();
     p["section"] = json!("updates");

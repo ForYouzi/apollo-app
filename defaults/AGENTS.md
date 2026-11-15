@@ -665,10 +665,10 @@ The main ones:
   `layout.clone {name, as?}` (duplicate, then switch; default `<name>-copy`).
 - App: `mod.clone {name, as?}` (duplicate; default `<name>-copy`), `mod.open {name}` (again: closes it), `overlay.close {id?}`, `app.help` (again: closes it), `app.palette` (again: closes it), `app.settings {section?}`
   (sections: `look`, `machines`, `alerts`, `updates`, `privacy`; Machines lists, updates, renames and removes ssh machines; settings edit the same files you do).
-  `app.check_updates` (looks for a newer herdr-core; Apollo never updates itself, new versions are on the Releases page; only a successful check reports Up to date; a failed check clears the checked time and can be retried), `app.update_core` (a newer herdr-core of this generation, terminals kept;
+  `app.check_updates` (looks for a newer herdr-core and a newer Apollo release on GitHub; Apollo never updates itself, new versions are on the Releases page; only a successful check reports Up to date; a failed check clears the checked time and can be retried), `app.update_core` (a newer herdr-core of this generation, terminals kept;
   never one a package manager owns), `app.welcome`, `app.whats_new`, `app.feedback {message?, from?}` (from `"person"` or `"agent"`; opens a review window, where the person can paste up to 3 screenshots; never sends until the person clicks Send), `app.reset`,
   `app.theme {name}`, `app.zoom_in`, `app.zoom_out`, `app.zoom_reset`,
-  `app.update` (restart into a downloaded app update; Apollo downloads none).
+  `app.update` (opens the newest Apollo release on the Releases page to download; Apollo never installs itself).
   Add machine lists all named ssh-config hosts in a scrollable list. Machines
   that need a password, a new host key or herdr-core installed show what to run
   in your own terminal; the picker updates once it is added. Other machines are
@@ -746,11 +746,11 @@ What's about the user, never a look:
   precedence as fonts.
 - `appearance`: `"light"` or `"dark"` always; absent, the system's. A layout
   with a light and a dark theme shows the matching one.
-- Updates: an installed app downloads them by itself and offers Restart and
-  What changed. If the app crashes or is killed with a verified newer update
-  waiting, the next launch installs it before opening a window. The first
-  start after an app update also updates herdr-core
-  to the latest release of the same generation, keeping terminals running.
+- Updates: Apollo never downloads or installs itself. A release build asks
+  GitHub for the latest Apollo release every hour; when a newer one is out,
+  the corner pill and Settings → Updates say so and Download (`app.update`)
+  opens its page. herdr-core still updates in place from its release server,
+  keeping terminals running.
   Package-managed cores stay with their package manager; Settings shows available releases.
   A core update error can be dismissed with its × or `overlay.close {id:"core-update-error"}`
   until the error changes or the update recovers.
@@ -758,11 +758,10 @@ What's about the user, never a look:
   its What's new button opens the waiting update's release range, or this
   version's notes, in the What's new window. Reading never clears the waiting-update dot.
   Rare spotlight releases open What’s new after restart, once; otherwise a
-  quiet Updated pill lasts for that launch. A build from source never updates.
-  Curated notes come from the bundled root `CHANGELOG.md`; remote notes and
-  media are optional. `update-notes.json` records the last successful app
-  version and presented spotlights; `update-notes-cache.md` caches remote
-  notes; `update-notes-media/` caches HTTPS images (including animated WebP clips),
+  quiet Updated pill lasts for that launch. A build from source never checks.
+  Notes come from the bundled root `CHANGELOG.md` only (Apollo ignores
+  `update-notes-cache.md`, release notes another app may cache there). `update-notes.json` records the last
+  successful app version and presented spotlights; `update-notes-media/` caches HTTPS images (including animated WebP clips),
   referenced below its item in the changelog as `![label](https://...)`.
   Each version uses `### New` with `- **Headline.** detail` highlights and
   `### Fixed` with short bullet items. Unsectioned bullets are plain items.

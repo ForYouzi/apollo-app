@@ -306,14 +306,16 @@ export function themes(): { name: string; light: boolean; colors: Record<string,
 /** The font families on this machine, by name. */
 export function fonts(): string[];
 
-/** Herdr's and herdr-core's versions and what's waiting. `app.updates`: always false (Apollo
- *  never updates itself; new versions are on the Releases page). `core.managed`: the package manager that owns the core (homebrew,
+/** Apollo's and herdr-core's versions and what's out. `app.latest`: a newer Apollo release on
+ *  GitHub, or null; `app.url`: its page (else the Releases page), which `app.update` opens.
+ *  `app.ready` (always null) and `app.updates` (always false) stay for older mods: Apollo
+ *  never downloads or installs itself. `core.managed`: the package manager that owns the core (homebrew,
  *  nix, mise), which the app never updates. `checked`: unix seconds of the last successful
  *  check; null before success or after a failed check.
  *  `checks`: anything is checked at all (not in a build from source); `checking`: looking now
  *  (`app.check_updates` starts a look). */
 export function updates(): {
-  app: { version: string; ready: string | null; updates: boolean };
+  app: { version: string; latest: string | null; url: string; ready: null; updates: false };
   notes: { version: string; date: string; items: { headline: string; detail: string; fixed: boolean; media: { path: string; width: number; height: number }[] }[]; spotlight: boolean }[];
   core: { version: string | null; managed: string | null; ready: string | null; updating: boolean; error: string | null };
   checked: number | null;
