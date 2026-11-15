@@ -17,7 +17,7 @@ The default app home is `~/.config/herdr-app`, including on macOS and Windows (u
 This folder holds your settings, keys, layouts, mods, generated agent guide and API types.
 It also holds mod data, shared state, window positions, this screen's focus and zoom, update notes and cached media, and telemetry while enabled.
 Mods may store sensitive data here. Apollo does not encrypt this folder.
-The [installed guide's file map](../defaults/AGENTS.md#the-files) explains the files.
+The [installed guide's file map](https://github.com/ForYouzi/apollo-app/blob/main/defaults/AGENTS.md#the-files) explains the files.
 
 Spaces, tabs and splits are stored in each machine's core document, not in the app home.
 Terminals and their output belong to [herdr-core](https://github.com/herdrdev/herdr-core).
@@ -61,4 +61,4 @@ For one run, set `DO_NOT_TRACK=1` or `HERDR_TELEMETRY=0`. CI environments disabl
 Telemetry being off does not stop update checks, mod network requests or feedback you choose to send.
 Feedback is drafted for you to review and send, not sent silently.
 
-[Back to Apollo](../README.md)
+[Home](Home)

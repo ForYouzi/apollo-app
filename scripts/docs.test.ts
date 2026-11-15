@@ -37,7 +37,7 @@ describe("CLI examples", () => {
       "README.md:1: unknown command or flag: wat",
       "README.md:4: unknown flag for ls: --wat",
     ]);
-    expect(checkMarkdown("docs/example.md", "~~~sh\nherdr-app do pane.split \\\n  --wat right\n~~~", ref)).toEqual(["docs/example.md:2: unknown flag for do: --wat"]);
+    expect(checkMarkdown("wiki/Example.md", "~~~sh\nherdr-app do pane.split \\\n  --wat right\n~~~", ref)).toEqual(["wiki/Example.md:2: unknown flag for do: --wat"]);
     expect(checkMarkdown("README.md", "Plain prose herdr-app wat is not code.", ref)).toEqual([]);
   });
 });
@@ -47,6 +47,6 @@ test("command reference comes from the catalog", () => {
   expect(page).toContain("## `pane.split`");
   expect(page).toContain("| `direction` | yes |");
   expect(page).toContain("Split a pane.");
-  expect(checkMarkdown("docs/commands.md", page, ref)).toEqual([]);
+  expect(checkMarkdown("wiki/Commands.md", page, ref)).toEqual([]);
 });
 

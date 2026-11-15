@@ -1,144 +1,64 @@
+<div align="center">
+
+<img src="assets/icons/apollo-ui-icon.png" alt="Apollo icon: a black A on a yellow rounded square" width="128" height="128"/>
+
 # Apollo
 
-Apollo is a desktop app for terminals and coding agents. Keep work in spaces, see which agents need you, and leave terminals running when you close the window.
+**A desktop home for your terminals and coding agents.**
 
-Apollo is a fork of [herdr-app](https://github.com/herdrdev/herdr-app) (Apache-2.0). It keeps Herdr's settings home, `~/.config/herdr-app`, and runs terminals in [herdr-core](https://github.com/herdrdev/herdr-core), so it shares your Herdr setup. The command is still `herdr-app`.
+[![Version](https://img.shields.io/github/v/release/ForYouzi/apollo-app?label=version&color=f5b82e)](https://github.com/ForYouzi/apollo-app/releases/latest) [![CI](https://github.com/ForYouzi/apollo-app/actions/workflows/ci.yml/badge.svg)](https://github.com/ForYouzi/apollo-app/actions/workflows/ci.yml) [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-5ab8ff.svg)](LICENSE)
 
-## Install
+**[Download](https://github.com/ForYouzi/apollo-app/releases/latest)** · **[Documentation](wiki/Home.md)**
 
-Download a zip from [Apollo's releases](https://github.com/ForYouzi/apollo-app/releases):
+<sub>macOS (Apple silicon and Intel) · Windows x64</sub>
 
-- `apollo-app-<version>-macos-aarch64.zip`: macOS on Apple silicon.
-- `apollo-app-<version>-macos-x86_64.zip`: macOS on Intel.
-- `apollo-app-<version>-windows-x86_64.zip`: Windows on x64.
+</div>
 
-On macOS, unzip it and move `Apollo.app` to Applications.
-The macOS build is signed ad hoc, not notarized, so the first launch is blocked.
-Right-click Apollo and choose Open, or clear the quarantine flag once:
+<p align="center">
+  <a href="assets/screenshots/hero.png">
+    <img src="assets/screenshots/hero.png" alt="Apollo with a storefront space open: a dev server logging requests beside a shell showing git status and the project tree" width="100%"/>
+  </a>
+  <br/>
+  <sub><b>One space per project.</b> Tabs and split panes inside; the sidebar keeps every space one click away.</sub>
+</p>
 
-```sh
-xattr -dr com.apple.quarantine /Applications/Apollo.app
-```
+## Why Apollo
 
-On Windows, unzip the `apollo-app` folder anywhere; `apollo-app.exe` opens the app.
-The folder also holds `herdr-app.exe`, the same program: adding the folder to your PATH gives you the `herdr-app` command the docs use.
+- **Spaces, tabs and panes.** Keep each project in its own space, and split terminals side by side.
+- **See which agent needs you.** Agents show as working, blocked or done, across every space.
+- **Terminals outlive the window.** [herdr-core](https://github.com/herdrdev/herdr-core) runs them; close the window and come back later, even over SSH.
+- **Clickable everything.** URLs and file paths in terminal output open or reveal with one click, even when a program wraps them.
+- **Make it yours.** Layouts, themes and JavaScript mods change the whole window, not just its colors.
 
-On a Windows machine without a GPU (a VM, Remote Desktop, or the Microsoft Basic Render Driver), Apollo draws the cheaper way meant for a CPU: about 30 frames a second, no antialiasing passes for shapes, simple shadows, an opaque window instead of `window_blur` (what a theme leaves transparent shows black), and grayscale text with no contrast boost instead of ClearType, whose colored edges blur over Remote Desktop. Set `GPUI_SOFTWARE_RENDER` to `force` to draw that way on a GPU too, or `off` to never do it; the default `auto` decides from the graphics adapter.
+## A closer look
 
-Apollo installs [herdr-core](https://github.com/herdrdev/herdr-core) when it is missing, and can update a core it cannot use.
+<table>
+  <tr>
+    <td width="50%"><a href="assets/screenshots/diff.png"><img src="assets/screenshots/diff.png" alt="A tests tab showing a colored git diff and passing bun tests" width="100%"/></a><br/><sub><b>Tabs</b> — a dev server in one, your diff and tests in the next.</sub></td>
+    <td width="50%"><a href="assets/screenshots/changes.png"><img src="assets/screenshots/changes.png" alt="The Changes panel listing two modified files with lines added and removed" width="100%"/></a><br/><sub><b>Changes</b> — what Git sees, one click from your terminals.</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><a href="assets/screenshots/palette.png"><img src="assets/screenshots/palette.png" alt="The command palette open over a split-pane tab" width="100%"/></a><br/><sub><b>Command palette</b> — every action, with its key.</sub></td>
+    <td width="50%"><a href="assets/screenshots/settings.png"><img src="assets/screenshots/settings.png" alt="Settings showing layout and theme choices" width="100%"/></a><br/><sub><b>Layouts and themes</b> — pick a layout; each keeps its own light and dark theme.</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><a href="assets/screenshots/files.png"><img src="assets/screenshots/files.png" alt="The Files panel showing the project folder tree" width="100%"/></a><br/><sub><b>Files</b> — the space's folder beside your work.</sub></td>
+    <td width="50%"><a href="assets/screenshots/win98.png"><img src="assets/screenshots/win98.png" alt="The Apollo 98 layout: terminals as DOS Prompt windows on a teal desktop with a taskbar" width="100%"/></a><br/><sub><b>Apollo 98</b> — the same terminals, redrawn entirely by mods.</sub></td>
+  </tr>
+</table>
 
-### Reveal files instead of opening them
+## Get started
 
-Cmd+click (macOS) or Ctrl+click (Windows) on a file path in terminal text shows the file selected in its folder (Finder or Explorer) instead of opening it.
+Download the [latest release](https://github.com/ForYouzi/apollo-app/releases/latest) for your platform and open it. Apollo shares Herdr's settings in `~/.config/herdr-app`, so an existing Herdr setup just works. See [Install](wiki/Install.md) for first-launch steps.
 
-Links are found the way [SonicTerm](https://github.com/D0n9X1n/SonicTerm) finds them: URLs (`http`, `https`, `mailto`, `file`, plus `ftp`, `ssh`, `git`, `tel` and others), and paths that exist: absolute, `~/`, `./`, relative and bare names (in the terminal's folder), `$HOME/…`, Windows drive and `\\server\share` paths, paths with spaces or in quotes, `file.rs:12:3` and `file.rs:12-20`, and paths inside `Read(…)`, `[label](…)` or `key=…`. A URL a program breaks across rows still opens whole when brackets close it: `(https://…` / `…)`, and a markdown link in Claude Code's numbered diff or markdown view.
+## Documentation
 
-## Find your work
+[Install](wiki/Install.md) · [Usage](wiki/Usage.md) · [Customize](wiki/Customize.md) · [Layouts and Mods](wiki/Layouts-and-Mods.md) · [Commands](wiki/Commands.md) · [For Agents](wiki/For-Agents.md) · [Security and Privacy](wiki/Security-and-Privacy.md) · [Building](wiki/Building.md)
 
-A **space** holds work on one machine, usually in one repo. Each space has **tabs**. Split a tab into **panes** to put terminals or mod panels beside each other.
+## Thanks, Herdr
 
-An unnamed space follows its first terminal's folder. Name a space or tab when you want a label that stays.
-New tabs start in the focused terminal's folder.
+Apollo is a fork of [herdr-app](https://github.com/herdrdev/herdr-app), the Herdr desktop app, and runs its terminals in [herdr-core](https://github.com/herdrdev/herdr-core). It takes Herdr's changes before every release.
 
-The agents sidebar brings agents from your spaces into one list, including workers started by another agent.
-Agents that report status show as:
+## License
 
-- **Working:** still busy.
-- **Blocked:** waiting for you.
-- **Done:** finished while you were looking elsewhere.
-- **Idle:** not working, or a finished agent you have looked at.
-
-Click an agent to see it. A worker without a pane opens in **peek**, over your tab. Keep it as a tab if you want it beside your other work.
-Ctrl-click a live terminal address in terminal text to peek at it; use Cmd-click on macOS.
-An address such as `t7` means a terminal on the same machine as the terminal showing it. `vps/t7` names one on another machine.
-
-The window arranges terminals. The core runs them.
-Closing the window leaves them running; closing a pane or tab ends its terminals.
-After a reboot or core crash, kept panes get fresh shells in their last folders, not their old programs.
-
-## Work on another machine
-
-Add an SSH machine from Settings → Machines or the sidebar's Add machine action.
-Pick a host from your SSH config or type how SSH reaches it.
-Spaces on that machine run their terminals there, not on your computer.
-
-Each machine keeps its spaces, tabs and splits in its core. Connected screens share that structure and the live terminals, but keep their own focus and zoom.
-Remote work keeps running when your local window closes or your laptop sleeps, as long as the remote machine and core stay up.
-
-## Make it yours
-
-Open the command palette to find an action by name, or open Settings to change fonts, colors, sounds and other preferences.
-Settings > Look also adjusts terminal line height, cell width and scroll speed. All default to 100%; layouts can override them with `terminal_line_height` (0.8–2), `terminal_cell_width` (0.8–2) and `terminal_scroll_speed` (0.1–5).
-The built-in layouts include Apollo, Terminals and Apollo 98.
-A **layout** arranges the window. **Mods** are small JavaScript programs that draw its panels, menus and dialogs.
-
-Duplicate a shipped layout or mod before changing its structure or code. Your copies stay yours; Apollo updates the shipped ones on start.
-Save a personal layout, mod or key file and the window reloads it.
-A broken edit keeps the last good version and reports the error.
-
-Ctrl+Shift+P shows every command and its key (Cmd+Shift+P on macOS). Change any key in `keys.json`; see [the keys section](defaults/AGENTS.md#keys-keysjson) of the mod guide for the format, including JSON objects for named, typed command arguments.
-
-On macOS, Cmd+A selects the terminal's whole screen and scrollback, ready for Cmd+C.
-In vim and other alternate-screen apps, it selects only that screen.
-Linux and Windows keep Ctrl+A for the shell; bind `terminal.select_all` in `keys.json` if desired.
-
-[Layouts and mods](docs/mods.md) · [Commands](docs/commands.md)
-
-## Updates and privacy
-
-Apollo never updates itself. Download new versions from [Apollo's releases](https://github.com/ForYouzi/apollo-app/releases).
-Release builds check for and install herdr-core updates; Settings → Updates shows what is available. Your terminals keep running in the core.
-What's New opens after you install a new version; you can open it again from the command palette.
-
-Apollo builds collect and send no usage data.
-Mods are trusted code, not sandboxed extensions. Read [security and privacy](docs/security.md) before installing someone else's mod.
-
-## For agents
-
-```sh
-herdr-app --skill
-```
-
-This prints the agent guide for driving the window. The herdr-core skill points agents here.
-Use herdr-core for running and coordinating programs; use the app to change what you see.
-
-```sh
-herdr-app ls
-herdr-app status
-herdr-app commands
-```
-
-The first two inspect the open window. The command list also works without one.
-See the [command reference](docs/commands.md) for arguments.
-
-## Build from source
-
-For bugs, mod API requests and code contributions, see [Contributing](CONTRIBUTING.md).
-
-Clone this repo with its submodules. Use Rust 1.95.0 and Zig 0.16.0, the versions used in [CI](.github/workflows/ci.yml).
-Linux needs the development packages listed in that workflow.
-
-```sh
-git clone --recurse-submodules https://github.com/ForYouzi/apollo-app.git
-cd apollo-app
-just build
-just test
-just install
-```
-
-Install [just](https://github.com/casey/just) to use these recipes.
-The platform installer builds a release and adds the app to your desktop.
-On Linux it links to this checkout, so keep the checkout in place.
-Quit and reopen Apollo to use the new build.
-
-Documentation checks also need [Bun](https://bun.sh): `just docs-check` checks generated pages and CLI examples; `just docs-generate` refreshes the reference pages.
-
-To compare drawing changes on Windows, Linux or macOS, run the same fixed workloads against each build:
-
-```sh
-python scripts/bench.py --bin <app executable> --set spinners --seconds 20
-```
-
-The runner requires `hc` on PATH and uses the Python executable running the script. It prints a unique artifact folder with the run settings, counters and results, then stops its private app, terminals and core. Every set uses Python fixture programs; the default set’s TUI workload replaces historical `btop` measurements. `--only spinners` measures just the quiet native spinner scenario. `--set titles` runs eight agents whose titles spin after a prefix (`π ⠹ task`) on the main layout. Keep the window visible and the display awake, and compare the same window activity and display settings; inactive windows may draw at a lower rate. Windows records visibility, foreground activity and display Hz at each measurement boundary; other platforms mark these observations unavailable. Visibility does not establish occlusion. Draws are window render calls. Render-to-paint elapsed time stops before scene finalization, backend drawing, uploads and presentation; it is separate from OS process CPU time. Neither measures physical presentation or the FPS HUD’s derived MAX FPS.
-
-`python scripts/bench_compare.py ghostty --root <artifact folder>` reuses a run’s fake agent for the macOS comparison. Benchmark checks: `python -m unittest discover -s scripts -p test_bench.py`.
+[Apache-2.0](LICENSE)

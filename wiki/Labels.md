@@ -65,3 +65,5 @@ read `pinned` from `agents()`; they never write the label themselves.
 Labels suit small values that change at human speed. Use the `herdr.`
 prefix. Bigger or app-wide state belongs in documents (`doc.get`,
 `doc.set`), and state for one device stays on that device.
+
+[Home](Home)

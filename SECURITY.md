@@ -6,4 +6,4 @@ Include the Herdr version, OS, what you found, steps to reproduce it, and the im
 
 Only the latest release is supported.
 
-For how Herdr handles trusted mods, updates and telemetry, see [security and privacy](docs/security.md).
+For how Apollo handles trusted mods, updates and telemetry, see [security and privacy](wiki/Security-and-Privacy.md).
