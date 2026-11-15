@@ -71,7 +71,7 @@ pub struct Agent {
     pub seen: bool,
     /// Core's turn counter: goes up each time it stops working.
     pub turn: u64,
-    /// The last turn a person looked at on any client (`herdr.seen`, docs/labels.md).
+    /// The last turn a person looked at on any client (`herdr.seen`, wiki/Labels.md).
     /// None: no client shares it yet, so `seen` decides.
     pub seen_turn: Option<u64>,
     /// Bumped on every state change (for "most recent" ordering).

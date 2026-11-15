@@ -39,7 +39,7 @@ pub struct EventLines {
     terminals: Vec<Value>,
     /// Each terminal's highest `herdr.seen` among the label changes since the
     /// last `take_seen`: `terminals` keeps only the last, which may hide a
-    /// write of ours under a later, lower one (docs/labels.md).
+    /// write of ours under a later, lower one (wiki/Labels.md).
     seen: HashMap<String, u64>,
     /// A fresh snapshot replaced the terminals since the last `take_seen`.
     resynced: bool,

@@ -37,7 +37,7 @@ pre-release: test docs-check
     else
       echo "review: the agent manual (herdr-app --skill) changed since $last. Read it once more."
     fi
-    echo "review: the mod guide (defaults/AGENTS.md), README.md and docs/ describe the changes above."
+    echo "review: the mod guide (defaults/AGENTS.md), README.md and wiki/ describe the changes above."
 
 build:
     cargo build --locked

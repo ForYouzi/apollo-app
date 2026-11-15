@@ -85,7 +85,7 @@ Clone with submodules. Use Rust 1.95.0 and Zig 0.16.0 (the versions in
   `--test` targets. Never run `shot_pixels` (or a bare `cargo test`, which
   includes it) in an agent session: it opens windows.
 - `bun test scripts/docs.test.ts` and `bun scripts/docs.ts check` check the
-  docs; `just docs-generate` refreshes `docs/commands.md` from `src/commands.rs`.
+  docs; `just docs-generate` refreshes `wiki/Commands.md` from `src/commands.rs`.
 - When dependencies or bundled assets change, run `just notices`.
 
 Never launch the app in an agent session: no `cargo run`, no bare

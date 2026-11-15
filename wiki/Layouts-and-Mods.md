@@ -2,7 +2,7 @@
 
 You can change the whole window, not just its colors. Layouts arrange it; mods draw the panels inside it.
 
-Read the [layout and mod guide](../defaults/AGENTS.md). This is the same guide Apollo writes into your app home on every start, so people and agents work from one source of truth.
+Read the [layout and mod guide](https://github.com/ForYouzi/apollo-app/blob/main/defaults/AGENTS.md). This is the same guide Apollo writes into your app home on every start, so people and agents work from one source of truth.
 It covers layouts, settings, keys, overlays, mod code and the app API.
 
 For live folder updates, `watchFolder(path)` returns an awaitable promise with
@@ -24,6 +24,6 @@ herdr-app status
 The check loads a mod and renders it once. It does not replace looking at the result in the window.
 
 Mods can run programs, read files and use the network. Only install code you trust.
-See [security and privacy](security.md).
+See [security and privacy](Security-and-Privacy).
 
-[Back to Apollo](../README.md)
+[Home](Home)

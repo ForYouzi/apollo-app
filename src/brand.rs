@@ -148,8 +148,8 @@ mod tests {
             let want = format!("HERDR_APP_HOME=\"$x/home\" \"$x/apollo-app/{exe}\" --version | grep -q \"^herdr-app \"");
             assert!(check.contains(&want), "release.yml doesn't run {exe}:\n{check}");
         }
-        let readme = include_str!("../README.md").replace("\r\n", "\n");
-        assert!(readme.contains("`apollo-app.exe` opens the app") && readme.contains("gives you the `herdr-app` command"), "README's Windows install text");
+        let readme = include_str!("../wiki/Install.md").replace("\r\n", "\n");
+        assert!(readme.contains("`apollo-app.exe` opens the app") && readme.contains("gives you the `herdr-app` command"), "wiki/Install.md's Windows install text");
     }
 
     /// Only a pushed version tag runs a release (nothing by hand, like SonicTerm), and
