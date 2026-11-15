@@ -2,7 +2,7 @@
 
 ## [0.0.7] - 2026-11-15
 
-Takes Herdr 0.1.16 and its later changes up to 257086e (entries below for 0.1.16): Dock icon badges for mods, mods can read a pane's scroll position, `tab.move` can step left or right, zooming a pane gives it the keyboard, the agents rail marks the focused agent, Empryo as a built-in program, and agents start under `sh` for shells like nushell. (#25)
+Takes Herdr 0.1.16 and its later changes up to 8e1208d (entries below for 0.1.16): Dock icon badges for mods, mods can read a pane's scroll position, `tab.move` can step left or right, zooming a pane gives it the keyboard, the agents rail marks the focused agent, Empryo as a built-in program, agents start under `sh` for shells like nushell, and a split started with a command runs it in your shell. (#25, #27)
 
 ### New
 - **Apollo tells you when a new version is out.** A release build checks GitHub for the latest Apollo release every hour; a newer one shows "Apollo x.y.z is out" with Download in the corner, in Settings → Updates and as a dot by Settings. Download opens the release page. (#19)
