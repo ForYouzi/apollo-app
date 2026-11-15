@@ -63,6 +63,11 @@ pub fn latest() -> Option<AppRelease> {
     newer_release(LATEST.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone(), env!("CARGO_PKG_VERSION"))
 }
 
+/// What `app.update` opens: the newer release's page, else the Releases page.
+pub fn download_page(latest: Option<AppRelease>) -> String {
+    latest.map_or_else(|| crate::brand::RELEASES_PAGE.to_owned(), |r| r.url)
+}
+
 /// `release`, if it is newer than `running`.
 fn newer_release(release: Option<AppRelease>, running: &str) -> Option<AppRelease> {
     release.filter(|r| newer(&r.version, running))
@@ -72,11 +77,20 @@ pub fn core() -> CoreInfo {
     CORE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
 }
 
+/// What the connected core says about itself (on connect and every reconnect).
 pub fn set_core(version: Option<String>, managed: Option<String>) {
-    let mut c = CORE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if version.is_some() {
-        c.version = version;
+    set_core_in(&CORE, version, managed);
+}
+
+fn set_core_in(core: &Mutex<CoreInfo>, version: Option<String>, managed: Option<String>) {
+    let mut c = core.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    // A core updated elsewhere (its package manager, a terminal) is no longer offered.
+    if let (Some(have), Some(ready)) = (&version, &c.ready)
+        && !newer(ready, have)
+    {
+        c.ready = None;
     }
+    c.version = version;
     c.managed = managed;
     if c.managed.is_some() {
         c.error = None;
@@ -350,6 +364,27 @@ mod tests {
     }
 
     #[test]
+    fn a_core_updated_elsewhere_is_no_longer_offered() {
+        let core = Mutex::new(CoreInfo { version: Some("0.1.18".into()), ready: Some("0.1.20".into()), ..Default::default() });
+        set_core_in(&core, Some("0.1.19".into()), None);
+        assert_eq!(core.lock().unwrap().ready.as_deref(), Some("0.1.20"), "still newer: still offered");
+        set_core_in(&core, Some("0.1.20".into()), None);
+        assert_eq!(core.lock().unwrap().ready, None, "installed elsewhere: no longer offered");
+        assert_eq!(core.lock().unwrap().version.as_deref(), Some("0.1.20"));
+        core.lock().unwrap().ready = Some("0.1.21".into());
+        set_core_in(&core, None, Some("homebrew".into()));
+        assert_eq!(core.lock().unwrap().version, None, "an unknown version is reported as unknown");
+        assert_eq!(core.lock().unwrap().ready.as_deref(), Some("0.1.21"));
+    }
+
+    #[test]
+    fn download_opens_the_newer_release_or_the_releases_page() {
+        let page = format!("{}/tag/v9.9.9", crate::brand::RELEASES_PAGE);
+        assert_eq!(download_page(Some(AppRelease { version: "9.9.9".into(), url: page.clone() })), page);
+        assert_eq!(download_page(None), crate::brand::RELEASES_PAGE);
+    }
+
+    #[test]
     fn only_a_newer_release_is_offered() {
         let r = |v: &str| Some(AppRelease { version: v.into(), url: crate::brand::RELEASES_PAGE.into() });
         assert_eq!(newer_release(r("0.0.7"), "0.0.6"), r("0.0.7"));
@@ -476,7 +511,11 @@ mod tests {
         assert_eq!(checked, Some(100));
         let failed = latest_app_from(&down);
         assert!(failed.is_err(), "an unreachable GitHub must fail: {failed:?}");
-        checked = checked_at(failed.is_ok(), 200);
+        // The whole pass fails, so the checker retries sooner and Settings says so.
+        let core = Mutex::new(CoreInfo::default());
+        let pass = check_pass(&[Product::App], &down, &down, &core);
+        assert!(!pass, "a failed GitHub lookup must fail the check");
+        checked = checked_at(pass, 200);
         assert_eq!(checked, None);
         let (url, _, stop) = serve(vec![(Box::leak(endpoint.into_boxed_str()), body)]);
         let recovered = latest_app_from(&url);

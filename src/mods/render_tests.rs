@@ -505,6 +505,21 @@ fn a_described_mod_leaves_no_folder_behind(cx: &mut TestAppContext) {
     assert!(!path.exists(), "left behind: {:?}", std::fs::read_dir(&path).map(|d| d.flatten().map(|e| e.file_name()).collect::<Vec<_>>()));
 }
 
+/// The sidebar's Settings row carries a dot only when a newer Apollo is out
+/// (`app.ready` is always null now: nothing is downloaded).
+#[gpui::test]
+fn settings_row_dots_a_newer_release(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let staged = Staged::new();
+    let mut p = props();
+    p["footer"] = json!(true);
+    let quiet = describe(cx, &staged, "mods/workspace-chrome", true, p.clone(), updates("current", "current"), None).unwrap();
+    let out = describe(cx, &staged, "mods/workspace-chrome", true, p, updates("latest", "current"), None).unwrap();
+    assert!(quiet.contains("settings") && out.contains("settings"), "{quiet}");
+    let dots = |tree: &str| tree.matches(".rounded_full").count();
+    assert_eq!(dots(&out), dots(&quiet) + 1, "a newer release adds one dot:\n{quiet}\n---\n{out}");
+}
+
 #[gpui::test]
 fn brand_leaves_room_for_macos_traffic_lights_only_outside_full_screen(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
