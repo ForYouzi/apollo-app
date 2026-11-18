@@ -493,28 +493,64 @@ fn shipped_initial_descriptions(cx: &mut TestAppContext) {
     );
 }
 
-/// A pane's name (pane.rename) stands for an agent in the tab bar and the agents
-/// list; the title the agent sets doesn't replace it.
+/// A pane's name (pane.rename) stands for an agent in its header, the tab bar
+/// and the agents list; the title the agent sets doesn't replace it, a tab the
+/// person named keeps its name, and a cleared name shows the agent's title again.
 #[gpui::test]
 fn a_named_pane_keeps_its_name_over_the_agent_title(cx: &mut TestAppContext) {
     cx.update(gpui_shell::init);
     let staged = Staged::new();
-    for (entry, named) in [("mods/tabs", "panes"), ("mods/agents", "agents")] {
-        let mut values = fixture(true, props(), updates("current", "current"));
-        for item in values.get_mut("panes").unwrap().as_array_mut().unwrap() {
-            item["title"] = json!("Claude Code: session title");
+    const LIVE: &str = "Claude Code: session title";
+    // `name`: the pane's name, or none; `tab`: the tab's name and whether someone gave it.
+    let values = |name: Option<&str>, tab: (&str, bool)| {
+        let mut v = fixture(true, props(), updates("current", "current"));
+        v.get_mut("spaces").unwrap()[0]["tabs"][0]["name"] = json!(tab.0);
+        v.get_mut("spaces").unwrap()[0]["tabs"][0]["named"] = json!(tab.1);
+        for item in v.get_mut("panes").unwrap().as_array_mut().unwrap() {
+            item["title"] = json!(LIVE);
+            item["name"] = Value::Null;
         }
-        for item in values.get_mut("agents").unwrap().as_array_mut().unwrap() {
-            item["title"] = json!("Claude Code: session title");
+        for item in v.get_mut("agents").unwrap().as_array_mut().unwrap() {
+            item["title"] = json!(LIVE);
+            item["pane_name"] = Value::Null;
         }
-        let tree = describe_with_values(cx, &staged, entry, values.clone(), None).unwrap();
-        assert!(!tree.contains("Kept name"), "{entry}: {tree}");
-        let first = &mut values.get_mut(named).unwrap()[0];
-        first[if named == "panes" { "name" } else { "pane_name" }] = json!("Kept name");
-        values.get_mut("panes").unwrap()[0]["name"] = json!("Kept name");
-        let tree = describe_with_values(cx, &staged, entry, values, None).unwrap();
-        assert!(tree.contains("Kept name"), "{entry}: {tree}");
+        v.get_mut("panes").unwrap()[0]["name"] = json!(name);
+        v.get_mut("agents").unwrap()[0]["pane_name"] = json!(name);
+        v
+    };
+    let mut render = |entry: &str, v| describe_with_values(cx, &staged, entry, v, None).unwrap();
+    for entry in ["mods/tabs", "mods/agents", "mods/pane"] {
+        let named = render(entry, values(Some("Kept name"), ("1", false)));
+        assert!(named.contains("Kept name"), "{entry}: {named}");
+        // A digits-only name is still the person's, not a tab number.
+        let digits = render(entry, values(Some("123"), ("1", false)));
+        assert!(digits.contains("123"), "{entry}: {digits}");
+        let cleared = render(entry, values(None, ("1", false)));
+        assert!(!cleared.contains("Kept name"), "{entry}: {cleared}");
     }
+    // The tab bar and agents list follow the agent's title again once the name is cleared.
+    for entry in ["mods/tabs", "mods/agents"] {
+        let cleared = render(entry, values(None, ("1", false)));
+        assert!(cleared.contains("session title"), "{entry}: {cleared}");
+        // A tab the person named keeps its name over the pane's.
+        let tab = render(entry, values(Some("Kept name"), ("Release", true)));
+        assert!(tab.contains("Release") && !tab.contains("Kept name"), "{entry}: {tab}");
+    }
+    // Two agents in one tab: each row reads its own pane's name (agents()[i].pane_name).
+    let mut many = values(None, ("1", false));
+    let mut second = many["agents"][0].clone();
+    second["address"] = json!("t3");
+    second["pane"] = json!("p3");
+    second["pane_name"] = json!("Second agent");
+    many.get_mut("agents").unwrap().as_array_mut().unwrap().push(second);
+    let mut pane = many["panes"][0].clone();
+    pane["pane"] = json!("p3");
+    pane["terminal"] = json!("t3");
+    pane["focused"] = json!(false);
+    pane["name"] = json!("Second agent");
+    many.get_mut("panes").unwrap().as_array_mut().unwrap().push(pane);
+    let tree = render("mods/agents", many);
+    assert!(tree.contains("Second agent"), "{tree}");
 }
 
 /// A mod's localStorage write lands on the executor; one that lands after the
