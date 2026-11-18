@@ -249,6 +249,20 @@ mod tests {
         assert_eq!(other.tab("t").unwrap().settled, Some(12));
     }
     #[test]
+    fn a_pane_name_reaches_every_window() {
+        // pane.rename sets the pane node's title; another window reads the shared document.
+        let mut m = model();
+        m.tab_mut("t").unwrap().root.find_mut("p").unwrap().title = Some("login fix".into());
+        let sent = serde_json::to_string(&Document::capture(&m, None)).unwrap();
+        let mut other = Model::default();
+        serde_json::from_str::<Document>(&sent).unwrap().replace(&mut other, None);
+        assert_eq!(other.tab("t").unwrap().root.find("p").unwrap().title.as_deref(), Some("login fix"));
+        // A cleared name clears there too.
+        m.tab_mut("t").unwrap().root.find_mut("p").unwrap().title = None;
+        Document::capture(&m, None).replace(&mut other, None);
+        assert_eq!(other.tab("t").unwrap().root.find("p").unwrap().title, None);
+    }
+    #[test]
     fn remote_roundtrip_qualifies_only_identity_not_mod_props() {
         let mut m = model();
         m.split_with("p", Axis::Row, Node::block("mod", Content::Mod { name: "test".into(), props: serde_json::json!({"terminal":"t1"}) }));

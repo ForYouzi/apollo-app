@@ -43,6 +43,9 @@ function leadPanes(all) {
 
 function title(tab, l) {
   const prog = l?.program?.name;
+  // A pane's name (pane.rename, a pane or an agent row) stands for it, as a tab's name does.
+  const fixed = l?.name ?? l?.pane_name;
+  if (fixed && (tab.name === prog || !tab.named)) return fixed;
   const live = clean(l?.title);
   // clean() would strip a path's leading ~ or /: test the title with only its status glyph gone.
   const path = /^[~/]|^[A-Za-z]:\\/.test((l?.title ?? "").replace(/^[^\p{L}\p{N}~/]+/u, ""));
@@ -282,13 +285,18 @@ export default class Agents extends View {
     // Read the pane snapshot once: every host read copies the whole list into JS.
     const leads = leadPanes(panes());
     const tabs = new Map(spaces().flatMap(s => s.tabs).map(tab => [tab.id, tab]));
+    // A number is the tab's automatic name, unless it is a pane's own name.
+    const fixed = new Set();
     const labels = new Map(list.map(a => {
       const tab = tabs.get(a.tab);
       const many = tabCounts.get(a.tab) > 1;
-      return [a.address, tab ? title(many ? { ...tab, named: false } : tab, many ? a : leads.get(a.tab)) : (a.title || a.program?.name || "")];
+      const l = many ? a : leads.get(a.tab);
+      const shown = tab ? title(many ? { ...tab, named: false } : tab, l) : (a.title || a.program?.name || "");
+      if (shown && shown === (l?.name ?? l?.pane_name)) fixed.add(a.address);
+      return [a.address, shown];
     }));
     const label = (a) => labels.get(a.address);
-    const detail = new Map(list.map(a => [a.address, /^\d+$/.test(label(a)) ? null : label(a)]));
+    const detail = new Map(list.map(a => [a.address, /^\d+$/.test(label(a)) && !fixed.has(a.address) ? null : label(a)]));
     const seen = {};
     for (const a of list) { const k = `${a.space_name}\u0000${detail.get(a.address) ?? ""}`; seen[k] = (seen[k] ?? 0) + 1; }
     for (const a of list) {
