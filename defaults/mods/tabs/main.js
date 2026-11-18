@@ -19,6 +19,8 @@ const clean = (s) => (s ?? "").replace(/^[^\p{L}\p{N}\p{Ps}\p{Pi}]+/u, "").repla
 function label(tab, lead) {
   const prog = lead?.program?.name;
   const base = tab.named ? tab.name : prog ?? "Terminal";
+  // A pane's name (pane.rename) stands for it until the person names the tab.
+  if (lead?.name && (tab.name === prog || !tab.named)) return lead.name;
   if (!lead?.program?.agent) return base;
   const live = clean(lead.title);
   // clean() would strip a path's leading ~ or /: test the title with only its status glyph gone.

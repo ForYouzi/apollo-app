@@ -493,6 +493,30 @@ fn shipped_initial_descriptions(cx: &mut TestAppContext) {
     );
 }
 
+/// A pane's name (pane.rename) stands for an agent in the tab bar and the agents
+/// list; the title the agent sets doesn't replace it.
+#[gpui::test]
+fn a_named_pane_keeps_its_name_over_the_agent_title(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let staged = Staged::new();
+    for (entry, named) in [("mods/tabs", "panes"), ("mods/agents", "agents")] {
+        let mut values = fixture(true, props(), updates("current", "current"));
+        for item in values.get_mut("panes").unwrap().as_array_mut().unwrap() {
+            item["title"] = json!("Claude Code: session title");
+        }
+        for item in values.get_mut("agents").unwrap().as_array_mut().unwrap() {
+            item["title"] = json!("Claude Code: session title");
+        }
+        let tree = describe_with_values(cx, &staged, entry, values.clone(), None).unwrap();
+        assert!(!tree.contains("Kept name"), "{entry}: {tree}");
+        let first = &mut values.get_mut(named).unwrap()[0];
+        first[if named == "panes" { "name" } else { "pane_name" }] = json!("Kept name");
+        values.get_mut("panes").unwrap()[0]["name"] = json!("Kept name");
+        let tree = describe_with_values(cx, &staged, entry, values, None).unwrap();
+        assert!(tree.contains("Kept name"), "{entry}: {tree}");
+    }
+}
+
 /// A mod's localStorage write lands on the executor; one that lands after the
 /// staged folder's drop recreates it, and the folder outlives the test.
 #[gpui::test]

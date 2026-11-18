@@ -43,6 +43,9 @@ function leadPanes(all) {
 
 function title(tab, l) {
   const prog = l?.program?.name;
+  // A pane's name (pane.rename, a pane or an agent row) stands for it, as a tab's name does.
+  const fixed = l?.name ?? l?.pane_name;
+  if (fixed && (tab.name === prog || !tab.named)) return fixed;
   const live = clean(l?.title);
   // clean() would strip a path's leading ~ or /: test the title with only its status glyph gone.
   const path = /^[~/]|^[A-Za-z]:\\/.test((l?.title ?? "").replace(/^[^\p{L}\p{N}~/]+/u, ""));

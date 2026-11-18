@@ -609,7 +609,9 @@ The main ones:
   fish: with other shells (nushell) and on Windows `argv` runs directly), `pane.close {pane?}`,
   `pane.zoom {pane?}`, `pane.focus {pane | terminal}`, `pane.go {direction}`,
   `pane.swap {pane?, direction | target}`, `pane.rename {pane?, name}` ("": unnamed
-  again; `panes()[i].name`, kept with its tab), `pane.resize {direction, pane?, px?}` (moves
+  again; `panes()[i].name` and `agents()[i].pane_name`, kept with its tab, so every
+  window shows it; the tab bar and agents list show it in place of the title an agent
+  sets, until someone names the tab), `pane.resize {direction, pane?, px?}` (moves
   the nearest border along that axis by px, default 40, as a drag would; a keyboard
   resize mode is a mod that runs it on h/j/k/l).
   `pane.zoom` also makes the pane its tab's focused one (the tab isn't
