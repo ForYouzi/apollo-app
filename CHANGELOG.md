@@ -1,5 +1,15 @@
 # Apollo changelog
 
+## [0.0.8] - 2026-11-17
+
+Takes Herdr's later changes up to 4deb605: `pane.rename`, keyboard pane resizing with `pane.resize`, a remote paste that shows it is still sending, and mods that handle terminal links (`link.js`). (#30)
+
+### New
+- **Give an agent a name that stays.** Right-click a pane and pick Rename (or run `pane.rename`): the name shows in the pane header, the tab bar and the agents list, on every window, instead of the title the agent sets as it works. An empty name goes back to the agent's title. A tab you named keeps your tab name. (#30)
+
+### Fixed
+- **Links in the terminal still reveal files in their folder with link mods on.** Herdr's mod link handlers now sit on Apollo's link finder: a mod's file rule sees `src/x.rs` for `src/x.rs:12-20`, and hovering never checks a network path. (#30)
+
 ## [0.0.7] - 2026-11-15
 
 Takes Herdr 0.1.16 and its later changes up to 8e1208d (entries below for 0.1.16): Dock icon badges for mods, mods can read a pane's scroll position, `tab.move` can step left or right, zooming a pane gives it the keyboard, the agents rail marks the focused agent, Empryo as a built-in program, agents start under `sh` for shells like nushell, and a split started with a command runs it in your shell. (#25, #27)
