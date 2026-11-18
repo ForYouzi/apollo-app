@@ -55,12 +55,12 @@ fn hard(cols: u16, rows: u16, lines: &[String]) -> Vt {
 /// What the app links at a cell, as `links::pick` decides from no folder.
 fn at(vt: &Vt, row: u16, col: u16) -> Option<String> {
     let ctx = crate::links::Ctx::new(None);
-    vt.link_at(col, row, |text, at, joined| crate::links::pick(text, at, joined, &ctx, |_| None).map(|(r, _)| r)).map(|hit| hit.target)
+    vt.link_at(col, row, |text, at, scan| crate::links::pick(text, at, scan == crate::vt::LinkScan::Joined, &ctx, |_| None).map(|(r, _)| r)).map(|hit| hit.target)
 }
 
 fn spans(vt: &Vt, row: u16, col: u16) -> Vec<(u16, u16, u16)> {
     let ctx = crate::links::Ctx::new(None);
-    vt.link_at(col, row, |text, at, joined| crate::links::pick(text, at, joined, &ctx, |_| None).map(|(r, _)| r)).map_or(Vec::new(), |hit| hit.spans.to_vec())
+    vt.link_at(col, row, |text, at, scan| crate::links::pick(text, at, scan == crate::vt::LinkScan::Joined, &ctx, |_| None).map(|(r, _)| r)).map_or(Vec::new(), |hit| hit.spans.to_vec())
 }
 
 // ---- a wrapper opened at the pane edge -------------------------------------

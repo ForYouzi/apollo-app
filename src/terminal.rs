@@ -63,12 +63,13 @@ pub fn hsla(c: Rgb) -> Hsla {
 
 #[derive(Clone, Debug, PartialEq)]
 enum LinkTarget {
-    External(links::Target),
+    External(links::Click),
     Terminal(String),
 }
 
 pub enum TerminalEvent {
     Peek(String),
+    Link(links::Click),
     TitleChanged,
     SelectionChanged,
     /// History scroll position changed enough for mods that watch `panes().scroll`.
@@ -161,10 +162,14 @@ pub struct TerminalView {
     selection_scroll: Option<Task<()>>,
     /// The terminal's folder, for links to relative paths.
     pub cwd: Option<PathBuf>,
+    pub link_handlers: Rc<RefCell<links::Handlers>>,
     /// The link under the pointer while the link modifier is held.
     link: Option<LinkTarget>,
     /// Right-clicks go to the program when it takes the mouse (Shift: the menu).
     pub right_click_to_program: bool,
+    /// Files on their way to this terminal's machine for over a second: what
+    /// the pane says meanwhile, by send.
+    sending: Vec<(u64, &'static str)>,
     grid: Rc<RefCell<Grid>>,
     focus: FocusHandle,
     was_focused: bool,
@@ -310,8 +315,10 @@ impl TerminalView {
             selection_pointer: Point::default(),
             selection_scroll: None,
             cwd: None,
+            link_handlers: Rc::default(),
             link: None,
             right_click_to_program: false,
+            sending: Vec::new(),
             grid: Rc::new(RefCell::new(Grid {
                 vt: Vt::new(size_hint.0.max(2), size_hint.1.max(1)),
                 core: core.clone(),
@@ -725,6 +732,25 @@ impl TerminalView {
             return drag_paths::unavailable(body);
         }
         let addr = self.address.clone();
+        static SENDS: AtomicU64 = AtomicU64::new(0);
+        let send = SENDS.fetch_add(1, Ordering::Relaxed);
+        let label = match (copies, paths.len()) {
+            (true, _) => "Sending image…",
+            (false, 1) => "Sending file…",
+            _ => "Sending files…",
+        };
+        let done = Rc::new(Cell::new(false));
+        let shown = done.clone();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_secs(1)).await;
+            if !shown.get() {
+                let _ = this.update(cx, |this, cx| {
+                    this.sending.push((send, label));
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
         cx.spawn(async move |this, cx| {
             let (there, refused) = cx
                 .background_executor()
@@ -748,7 +774,11 @@ impl TerminalView {
                     (there, refused)
                 })
                 .await;
+            // A closed pane is gone here: its paths go nowhere.
             let _ = this.update(cx, |this, cx| {
+                done.set(true);
+                this.sending.retain(|(s, _)| *s != send);
+                cx.notify();
                 if !there.is_empty() {
                     this.paste_paths(there);
                 }
@@ -1115,18 +1145,31 @@ impl TerminalView {
         let g = self.grid.borrow();
         let (x, y) = local(&g, pos);
         let (col, row) = (x / f32::from(g.cell.width), y / f32::from(g.cell.height));
+        let active = self.link_handlers.borrow();
+        let cwd = self.cwd.as_deref();
+        let remote = self.address.contains('/');
         let mut target = None;
+        use vt::LinkScan;
         let ctx = links::Ctx::new(self.cwd.clone());
-        let hit = g.vt.link_at(col as u16, row as u16, |text, at, joined| {
-            let (range, picked) = links::pick(text, at, joined, &ctx, |w| crate::mods::terminal_address(w, &self.address))?;
+        let hit = g.vt.link_at(col as u16, row as u16, |text, at, scan| {
+            if scan == LinkScan::Unresolved {
+                // A path that leads nowhere here: only for a mod's link rules, its longest reading.
+                if active.is_empty() {
+                    return None;
+                }
+                let range = links::spans(text, at, links::PathStyle::native()).into_iter().max_by_key(|r| r.len())?;
+                target = Some(LinkTarget::External(links::resolved(&text[range.clone()], None).click(remote, &active)?));
+                return Some(range);
+            }
+            let (range, picked) = links::pick(text, at, scan == LinkScan::Joined, &ctx, |w| crate::mods::terminal_address(w, &self.address))?;
             target = Some(match picked {
-                links::Picked::Link(link) => LinkTarget::External(link),
+                links::Picked::Link(link) => LinkTarget::External(links::resolved(&text[range.clone()], Some(link)).click(remote, &active)?),
                 links::Picked::Terminal(address) => LinkTarget::Terminal(address),
             });
             Some(range)
         })?;
-        // OSC 8 links bypass text detection.
-        let target = target.or_else(|| links::resolve(&hit.target, self.cwd.as_deref()).map(LinkTarget::External))?;
+        // OSC 8 bypasses text detection. The URI is already the full destination.
+        let target = target.or_else(|| links::resolved(&hit.target, links::resolve(&hit.target, cwd)).click(remote, &active).map(LinkTarget::External))?;
         Some((target, hit.spans))
     }
 
@@ -1439,9 +1482,9 @@ fn paste_image_bytes(format: ImageFormat, bytes: &[u8]) -> Option<(ImageFormat, 
 /// address comes back to peek at.
 fn follow(target: LinkTarget, opener: Arc<dyn links::Opener + Send + Sync>) -> Option<String> {
     match target {
-        LinkTarget::External(target) => {
-            if let Err(e) = std::thread::Builder::new().name("apollo-link".into()).spawn(move || links::activate(&target, &*opener)) {
-                tracing::warn!("cannot start a thread to follow a link: {e}");
+        LinkTarget::External(click) => {
+            if let Some(target) = click.native {
+                links::open(target, opener);
             }
             None
         }
@@ -2501,8 +2544,13 @@ impl Render for TerminalView {
                 if link_mods(&ev.modifiers)
                     && let Some((target, _)) = this.link_at(ev.position)
                 {
-                    if let Some(address) = follow(target, Arc::new(links::SystemOpener)) {
-                        cx.emit(TerminalEvent::Peek(address));
+                    match target {
+                        LinkTarget::External(click) if !click.handlers.is_empty() => cx.emit(TerminalEvent::Link(click)),
+                        target => {
+                            if let Some(address) = follow(target, Arc::new(links::SystemOpener)) {
+                                cx.emit(TerminalEvent::Peek(address));
+                            }
+                        }
                     }
                     return;
                 }
@@ -2726,6 +2774,21 @@ impl Render for TerminalView {
                         .child(format!("[{why}]")),
                 )
             })
+            .when_some(self.sending.last(), |d, (_, label)| {
+                d.child(
+                    div()
+                        .absolute()
+                        .bottom_2()
+                        .left_3()
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .bg(crate::settings::color("raised"))
+                        .text_color(hsla(vt::theme().fg))
+                        .text_xs()
+                        .child(*label),
+                )
+            })
     }
 }
 
@@ -2767,7 +2830,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         let opener: std::sync::Arc<dyn crate::links::Opener + Send + Sync> = std::sync::Arc::new(Remote(std::sync::Mutex::new(tx)));
         let dir = std::env::temp_dir();
-        assert_eq!(super::follow(super::LinkTarget::External(crate::links::Target::File(dir.clone())), opener.clone()), None);
+        assert_eq!(super::follow(super::LinkTarget::External(crate::links::Click { handlers: Vec::new(), native: Some(crate::links::Target::File(dir.clone())) }), opener.clone()), None);
         let (call, thread) = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("the opener is called");
         assert_eq!(call, crate::links::Call::OpenFolder(std::fs::canonicalize(&dir).unwrap()));
         assert_ne!(thread, std::thread::current().id());
@@ -2830,6 +2893,42 @@ mod tests {
         }
         assert!(ended);
         assert!(rx.is_closed() && rx.is_empty());
+    }
+
+    #[gpui::test]
+    fn terminal_link_scans_keep_peeks_and_verified_joins_ahead_of_missing_paths(cx: &mut gpui::TestAppContext) {
+        use super::{LinkTarget, TerminalView};
+        use crate::{links, mods};
+        use gpui::*;
+
+        let cwd = std::env::temp_dir().join(format!("herdr-terminal-link-scan-{}", std::process::id()));
+        let joined = cwd.join("./abc/defg/x.png");
+        std::fs::create_dir_all(joined.parent().unwrap()).unwrap();
+        std::fs::write(&joined, "").unwrap();
+        let view = cx.new(|cx| TerminalView::attach(crate::hc::offline(), "t1".into(), (18, 5), cx));
+        view.update(cx, |view, _| {
+            view.cwd = Some(cwd.clone());
+            view.grid.borrow_mut().vt.write(b"./gone.png\r\npeer.test/t7\r\n  see ./abc/de\r\n  fg/x.png ok");
+            let hit = |view: &TerminalView, col: f32, row: f32| {
+                view.link_at(point(px(9.0 * col + 1.0), px(18.0 * row + 1.0))).map(|(target, _)| target)
+            };
+            assert!(hit(view, 6.0, 0.0).is_none());
+
+            let rules: Vec<links::Rule> = serde_json::from_value(json!([{"kind":"file","pattern":"."}])).unwrap();
+            view.link_handlers.borrow_mut().push(("viewer".into(), rules.into()));
+            let Some(LinkTarget::External(missing)) = hit(view, 6.0, 0.0) else { panic!("missing link handler") };
+            assert_eq!(missing.handlers[0].1, json!({"kind":"file", "raw":"./gone.png", "path":null}));
+            assert!(missing.native.is_none());
+
+            mods::publish_terminals(json!([{"address":"peer.test/t7"}]));
+            assert!(matches!(hit(view, 7.0, 1.0), Some(LinkTarget::Terminal(address)) if address == "peer.test/t7"));
+            mods::publish_terminals(json!([]));
+
+            let Some(LinkTarget::External(file)) = hit(view, 5.0, 3.0) else { panic!("missing joined link") };
+            assert_eq!(file.handlers[0].1["raw"], "./abc/defg/x.png");
+            assert_eq!(file.native, Some(links::Target::File(joined)));
+        });
+        std::fs::remove_dir_all(cwd).unwrap();
     }
 
     #[gpui::test]
