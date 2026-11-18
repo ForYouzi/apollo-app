@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Puts the Zig packages in vendor/zig-packages into Zig's package cache, so a
+# build doesn't need their host (see vendor/zig-packages/README.md).
+set -euo pipefail
+root=$(cd "$(dirname "$0")/.." && pwd)
+zig=${ZIG:-zig}
+# `zig fetch` reads the nearest build.zig: Ghostty's, which pins these packages.
+cd "$root/vendor/ghostty"
+for f in "$root"/vendor/zig-packages/*.tar.gz; do
+  name=$(basename "$f" .tar.gz)
+  got=$("$zig" fetch "$f")
+  test "$got" = "$name" || { echo "zig-seed: $f is $got, not $name" >&2; exit 1; }
+  echo "zig-seed: $name"
+done

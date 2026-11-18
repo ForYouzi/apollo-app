@@ -57,6 +57,9 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: ${{ env.ZIG_VERSION }}
+      # Zig packages whose host can be down (vendor/zig-packages/README.md).
+      - name: Seed Zig packages
+        run: scripts/zig-seed
       # The whole target/, like release.yml: rust-cache drops the vendored crates.
       # Keyed by what the dependencies build from, so a source-only push
       # restores an exact hit and saves nothing (no cache per commit).
