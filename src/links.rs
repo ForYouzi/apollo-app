@@ -466,10 +466,14 @@ pub struct Resolved<'a> {
 }
 
 /// A link's text with what Apollo already found it opens (`pick` or `resolve`).
-/// Its file spelling drops a `:42` or final `.` that isn't part of the file's name.
+/// Its file spelling ends with the file's name: a place after it (`:42`,
+/// `:12-20`) or a final `.` is not part of the file.
 pub fn resolved(raw: &str, native: Option<Target>) -> Resolved<'_> {
-    let literal = matches!(&native, Some(Target::File(p)) if p.file_name().and_then(|n| n.to_str()).is_some_and(|n| raw.ends_with(n)));
-    let spelling = if literal || has_scheme(raw) { raw } else { without_suffix(raw) };
+    let named = match &native {
+        Some(Target::File(p)) if !has_scheme(raw) => p.file_name().and_then(|n| n.to_str()).and_then(|n| raw.rfind(n).map(|i| &raw[..i + n.len()])),
+        _ => None,
+    };
+    let spelling = named.unwrap_or(if has_scheme(raw) { raw } else { without_suffix(raw) });
     Resolved { raw, spelling, native }
 }
 
@@ -604,7 +608,8 @@ impl Resolved<'_> {
                     } else {
                         match &native {
                             // Apollo opens a local `file:` URL's folder even when the file is gone.
-                            Some(Target::File(path)) if path.exists() => Some(path.as_path()),
+                            // Never a network path (UNC) on hover: that probe can block and authenticate.
+                            Some(Target::File(path)) if can_verify_handler_path(path) && path.exists() => Some(path.as_path()),
                             _ if uri.is_some_and(|(host, _)| host.is_empty() || host.eq_ignore_ascii_case("localhost")) => {
                                 url_file = decoded.as_deref().map(uri_path)
                                     .filter(|path| can_verify_handler_path(path) && path.exists());
@@ -824,6 +829,32 @@ mod tests {
     }
 
     #[test]
+    fn file_rules_see_a_source_place_dropped() {
+        let dir = std::env::temp_dir().join(format!("apollo-link-place-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/x.rs"), "").unwrap();
+        let active = vec![("editor".into(), rules(json!([{"kind":"file", "pattern":r"^src/x\.rs$"}])))];
+        let ctx = Ctx::new(Some(dir.clone()));
+        for text in ["src/x.rs:12-20", "src/x.rs:12\u{2013}20", "src/x.rs:12:3", "src/x.rs."] {
+            let (range, picked) = pick(text, 1, false, &ctx, |_| None).unwrap_or_else(|| panic!("no link in {text}"));
+            let Picked::Link(target) = picked else { panic!("{text}") };
+            let hit = resolved(&text[range.clone()], Some(target)).click(false, &active).unwrap();
+            assert_eq!(hit.handlers.len(), 1, "{text} ({:?})", &text[range]);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn handlers_never_probe_a_network_path() {
+        let unc = PathBuf::from(r"\\unreachable-host\share\plot.png");
+        let active = vec![("files".into(), rules(json!([{"kind":"file", "pattern":r"\.png$"}])))];
+        let raw = r"\\unreachable-host\share\plot.png";
+        let hit = resolved(raw, Some(Target::File(unc.clone()))).click(false, &active).unwrap();
+        assert_eq!(hit.handlers[0].1["path"], Value::Null);
+        assert_eq!(hit.native, Some(Target::File(unc)));
+    }
+
+    #[test]
     fn file_uris_offer_both_views_and_keep_the_local_opener() {
         let dir = std::env::temp_dir().join(format!("herdr-file-uri-handlers-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -909,7 +940,8 @@ mod tests {
         let uri = format!("file://{}/assets-%FF/plot.png", dir.display());
         let hit = for_handlers(&uri, None).click(false, &active).unwrap();
         assert_eq!(hit.handlers[0].1, json!({"kind":"file", "raw":uri, "path":null}));
-        assert_eq!(hit.native, Some(Target::Url(uri)));
+        // Apollo's resolver opens no `file:` URL whose path isn't UTF-8.
+        assert_eq!(hit.native, native_target(&uri, None));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
