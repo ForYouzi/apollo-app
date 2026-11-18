@@ -447,11 +447,13 @@ fn has_scheme(link: &str) -> bool {
 }
 
 // The period ending a sentence, or `:42` / `:42:7` naming a place in the file.
+// Also a range, `:12-20` or `:12–20`, as Apollo's scanner reads one.
 fn without_suffix(path: &str) -> &str {
     let mut bare = path.strip_suffix('.').unwrap_or(path);
+    let number = |n: &str| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit());
     for _ in 0..2 {
         match bare.rsplit_once(':') {
-            Some((head, n)) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => bare = head,
+            Some((head, n)) if number(n) || n.split_once(['-', '\u{2013}']).is_some_and(|(a, b)| number(a) && number(b)) => bare = head,
             _ => break,
         }
     }
@@ -466,14 +468,13 @@ pub struct Resolved<'a> {
 }
 
 /// A link's text with what Apollo already found it opens (`pick` or `resolve`).
-/// Its file spelling ends with the file's name: a place after it (`:42`,
-/// `:12-20`) or a final `.` is not part of the file.
+/// Its file spelling drops a place (`:42`, `:42:7`, `:12-20`) or a final `.`,
+/// unless the file found is named with them.
 pub fn resolved(raw: &str, native: Option<Target>) -> Resolved<'_> {
-    let named = match &native {
-        Some(Target::File(p)) if !has_scheme(raw) => p.file_name().and_then(|n| n.to_str()).and_then(|n| raw.rfind(n).map(|i| &raw[..i + n.len()])),
-        _ => None,
-    };
-    let spelling = named.unwrap_or(if has_scheme(raw) { raw } else { without_suffix(raw) });
+    // The whole text is the file's name when the file found ends with it (`main.rs:7` exists).
+    let literal = matches!(&native, Some(Target::File(p)) if p.file_name().and_then(|n| n.to_str())
+        .is_some_and(|n| raw.rsplit(['/', '\\']).next() == Some(n)));
+    let spelling = if literal || has_scheme(raw) { raw } else { without_suffix(raw) };
     Resolved { raw, spelling, native }
 }
 
@@ -514,6 +515,20 @@ fn uri_path(path: &str) -> PathBuf {
         return PathBuf::from(path[1..].replace('/', "\\"));
     }
     PathBuf::from(path)
+}
+
+/// A path the system reaches over the network or through a device (`\\host\share`,
+/// `\\?\UNC\…`, `\\.\…`); a verbatim disk path (`\\?\C:\…`) is local.
+#[cfg(windows)]
+fn network_path(path: &Path) -> bool {
+    use std::path::{Component, Prefix};
+    matches!(path.components().next(), Some(Component::Prefix(prefix))
+        if matches!(prefix.kind(), Prefix::UNC(..) | Prefix::VerbatimUNC(..) | Prefix::DeviceNS(..)))
+}
+
+#[cfg(not(windows))]
+fn network_path(_: &Path) -> bool {
+    false
 }
 
 fn can_verify_handler_path(path: &Path) -> bool {
@@ -609,7 +624,7 @@ impl Resolved<'_> {
                         match &native {
                             // Apollo opens a local `file:` URL's folder even when the file is gone.
                             // Never a network path (UNC) on hover: that probe can block and authenticate.
-                            Some(Target::File(path)) if can_verify_handler_path(path) && path.exists() => Some(path.as_path()),
+                            Some(Target::File(path)) if !network_path(path) && path.exists() => Some(path.as_path()),
                             _ if uri.is_some_and(|(host, _)| host.is_empty() || host.eq_ignore_ascii_case("localhost")) => {
                                 url_file = decoded.as_deref().map(uri_path)
                                     .filter(|path| can_verify_handler_path(path) && path.exists());
@@ -840,8 +855,40 @@ mod tests {
             let Picked::Link(target) = picked else { panic!("{text}") };
             let hit = resolved(&text[range.clone()], Some(target)).click(false, &active).unwrap();
             assert_eq!(hit.handlers.len(), 1, "{text} ({:?})", &text[range]);
+            // Remote, or a file that isn't here: the rule sees the same name.
+            let remote = resolved(&text[range.clone()], None).click(true, &active).unwrap();
+            assert_eq!(remote.handlers.len(), 1, "remote {text}");
+        }
+        let gone = vec![("editor".into(), rules(json!([{"kind":"file", "pattern":r"^src/gone\.rs$"}])))];
+        assert_eq!(resolved("src/gone.rs:12-20", None).click(false, &gone).unwrap().handlers.len(), 1);
+        // A file named with digits: the place after it never reads as its name.
+        std::fs::write(dir.join("src/12"), "").unwrap();
+        let digits = vec![("editor".into(), rules(json!([{"kind":"file", "pattern":r"^\./src/12$"}])))];
+        for text in ["./src/12:7", "./src/12:12", "./src/12:12-20"] {
+            let (range, picked) = pick(text, 3, false, &ctx, |_| None).unwrap_or_else(|| panic!("no link in {text}"));
+            let Picked::Link(native) = picked else { panic!("{text}") };
+            assert_eq!(resolved(&text[range], Some(native)).click(false, &digits).unwrap().handlers.len(), 1, "{text}");
+        }
+        // A file named with its place keeps it (`main.rs:7` is the file).
+        #[cfg(unix)]
+        {
+            std::fs::write(dir.join("src/main.rs:7"), "").unwrap();
+            let literal = vec![("editor".into(), rules(json!([{"kind":"file", "pattern":r"^src/main\.rs:7$"}])))];
+            let native = resolve("src/main.rs:7", Some(&dir));
+            assert_eq!(resolved("src/main.rs:7", native).click(false, &literal).unwrap().handlers.len(), 1);
         }
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_verbatim_disk_path_is_local_and_unc_is_not() {
+        let dir = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+        assert!(dir.to_string_lossy().starts_with(r"\\?\"), "{dir:?}");
+        assert!(!network_path(&dir));
+        assert!(network_path(Path::new(r"\\host\share\x.png")));
+        assert!(network_path(Path::new(r"\\?\UNC\host\share\x.png")));
+        assert!(network_path(Path::new(r"\\.\device\x")));
     }
 
     #[test]

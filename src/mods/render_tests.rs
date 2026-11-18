@@ -514,6 +514,9 @@ fn a_named_pane_keeps_its_name_over_the_agent_title(cx: &mut TestAppContext) {
             item["title"] = json!(LIVE);
             item["pane_name"] = Value::Null;
         }
+        // The other agent reads differently, so a row is never found by the wrong one.
+        v.get_mut("panes").unwrap()[1]["title"] = json!("Other agent");
+        v.get_mut("agents").unwrap()[1]["title"] = json!("Other agent");
         v.get_mut("panes").unwrap()[0]["name"] = json!(name);
         v.get_mut("agents").unwrap()[0]["pane_name"] = json!(name);
         v
@@ -535,6 +538,9 @@ fn a_named_pane_keeps_its_name_over_the_agent_title(cx: &mut TestAppContext) {
         // A tab the person named keeps its name over the pane's.
         let tab = render(entry, values(Some("Kept name"), ("Release", true)));
         assert!(tab.contains("Release") && !tab.contains("Kept name"), "{entry}: {tab}");
+        // A tab named after its program (Herdr names one so) follows the pane's name.
+        let program = render(entry, values(Some("Kept name"), ("Pi", true)));
+        assert!(program.contains("Kept name"), "{entry}: {program}");
     }
     // Two agents in one tab: each row reads its own pane's name (agents()[i].pane_name).
     let mut many = values(None, ("1", false));
