@@ -42,6 +42,8 @@ jobs:
         with: { toolchain: "${{ env.RUST_TOOLCHAIN }}" }
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with: { version: "${{ env.ZIG_VERSION }}" }
+      # Zig packages whose host can be down (vendor/zig-packages/README.md).
+      - run: scripts/zig-seed
       - if: runner.os == 'Windows'
         run: echo "LIBCLANG_PATH=C:\\Program Files\\LLVM\\bin" >> "$GITHUB_ENV"
       - run: scripts/package
