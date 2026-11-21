@@ -606,6 +606,9 @@ pub enum LinkScan {
     Plain,
     Joined,
     Unresolved,
+    /// The whole text is one URL rows a program broke were proven to spell:
+    /// open it as it is, untrimmed.
+    Exact,
 }
 
 /// A link found in the terminal: what it says, and where it shows.
@@ -1239,7 +1242,8 @@ impl Vt {
                     }
                 }
                 let at = spots.iter().position(|s| s.y == hovered && s.x <= col && col < s.x + s.width)?;
-                return self.link_in(&text, &spots, top, at, &mut find, LinkScan::Plain);
+                // The rows spell exactly this URL: no scan may trim it.
+                return self.link_in(&text, &spots, top, at, &mut find, LinkScan::Exact);
             }
             hardwrap::Joined::Unproven => return None,
             hardwrap::Joined::None => {}
@@ -2851,7 +2855,12 @@ mod tests {
         let mut vt = Vt::new(url.len() as u16, 3);
         vt.write(format!("{url}\r\nand more").as_bytes());
         let ctx = crate::links::Ctx::new(None);
-        let find = |text: &str, at: usize, scan: LinkScan| crate::links::pick(text, at, scan == LinkScan::Joined, &ctx, |_| None).map(|(r, _)| r);
+        let find = |text: &str, at: usize, scan: LinkScan| {
+            if scan == LinkScan::Exact {
+                return Some(0..text.len());
+            }
+            crate::links::pick(text, at, scan == LinkScan::Joined, &ctx, |_| None).map(|(r, _)| r)
+        };
         assert_eq!(vt.link_at(3, 0, find).unwrap().target, url);
         let rec = crate::links::Recorder::default();
         let Some((_, crate::links::Picked::Link(target))) = crate::links::pick(&url, 0, false, &ctx, |_| None) else { panic!() };
@@ -2898,7 +2907,12 @@ mod tests {
     /// What the app does: `links::pick` from `dir`.
     fn picking(dir: &std::path::Path) -> impl Fn(&str, usize, LinkScan) -> Option<std::ops::Range<usize>> + use<> {
         let ctx = crate::links::Ctx::new(Some(dir.to_path_buf()));
-        move |text: &str, at: usize, scan: LinkScan| crate::links::pick(text, at, scan == LinkScan::Joined, &ctx, |_| None).map(|(r, _)| r).filter(|_| scan != LinkScan::Unresolved)
+        move |text: &str, at: usize, scan: LinkScan| {
+            if scan == LinkScan::Exact {
+                return Some(0..text.len());
+            }
+            crate::links::pick(text, at, scan == LinkScan::Joined, &ctx, |_| None).map(|(r, _)| r).filter(|_| scan != LinkScan::Unresolved)
+        }
     }
 
     fn scratch(name: &str, files: &[&str]) -> std::path::PathBuf {
@@ -2990,7 +3004,10 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
-        fn found(text: &str, at: usize, _: LinkScan) -> Option<std::ops::Range<usize>> {
+        fn found(text: &str, at: usize, scan: LinkScan) -> Option<std::ops::Range<usize>> {
+        if scan == LinkScan::Exact {
+            return Some(0..text.len());
+        }
         crate::links::find(text, at)
     }
 
