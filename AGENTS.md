@@ -95,8 +95,11 @@ talk; run them with `HERDR_APP_HOME` pointing at a scratch folder
 signal or restart the person's app or core.
 
 `scripts/package` builds a release zip into `dist/` (macOS: ad-hoc signed
-`Apollo.app` unless `APPLE_CERTIFICATE_P12` is set; Windows: an
-`apollo-app` folder). `scripts/install-macos` writes `~/Applications/Apollo.app`;
+`Apollo.app` unless `APPLE_CERTIFICATE_P12` is set, then notarized and
+stapled when `APPLE_API_KEY`, `APPLE_API_KEY_ID` and `APPLE_API_ISSUER` are
+set; Windows: an `apollo-app` folder). The release workflow passes these from
+the repository's secrets of the same names; the release notes say which
+signing a release got. `scripts/install-macos` writes `~/Applications/Apollo.app`;
 don't run it in agent sessions.
 
 ## Contributing

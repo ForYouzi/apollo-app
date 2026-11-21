@@ -1,0 +1,40 @@
+#!/bin/bash
+# Notarize a Developer ID signed Apollo.app and staple the ticket to it, so
+# Gatekeeper opens it offline. Without APPLE_API_KEY (an App Store Connect API
+# private key, .p8 text), APPLE_API_KEY_ID and APPLE_API_ISSUER it does nothing:
+# builds without the secrets stay ad hoc (scripts/mac-sign). Half the secrets,
+# or the secrets on an ad hoc app, is an error, never a quiet unsigned release.
+set -euo pipefail
+
+app=${1:?usage: mac-notarize Apollo.app}
+set_count=0
+for v in APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER; do
+  [[ -n ${!v:-} ]] && set_count=$((set_count + 1))
+done
+if ((set_count == 0)); then
+  echo "mac-notarize: no notary key, $app stays as signed"
+  exit 0
+fi
+((set_count == 3)) || { echo 'mac-notarize: set all of APPLE_API_KEY, APPLE_API_KEY_ID and APPLE_API_ISSUER' >&2; exit 1; }
+# Authority lines only appear at verbosity 2.
+[[ $(codesign -dvv "$app" 2>&1) == *"Authority=Developer ID Application:"* ]] ||
+  { echo "mac-notarize: $app is not Developer ID signed (set APPLE_CERTIFICATE_P12)" >&2; exit 1; }
+
+umask 077
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+printf '%s' "$APPLE_API_KEY" > "$work/key.p8"
+auth=(--key "$work/key.p8" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER")
+# Apple takes a zip of the app; the ticket is then stapled to the app itself.
+ditto -c -k --keepParent "$app" "$work/submit.zip"
+xcrun notarytool submit "$work/submit.zip" "${auth[@]}" --wait --timeout 30m --output-format json > "$work/result.json" || true
+cat "$work/result.json"
+status=$(jq -r '.status // empty' "$work/result.json")
+if [[ $status != Accepted ]]; then
+  id=$(jq -r '.id // empty' "$work/result.json")
+  [[ -n $id ]] && xcrun notarytool log "$id" "${auth[@]}" || true
+  echo "mac-notarize: notarization ${status:-failed}" >&2
+  exit 1
+fi
+xcrun stapler staple "$app"
+xcrun stapler validate "$app"

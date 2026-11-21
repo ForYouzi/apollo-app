@@ -148,6 +148,18 @@ mod tests {
             let want = format!("HERDR_APP_HOME=\"$x/home\" \"$x/apollo-app/{exe}\" --version | grep -q \"^herdr-app \"");
             assert!(check.contains(&want), "release.yml doesn't run {exe}:\n{check}");
         }
+        // The icon beside the exe marks the install folder (src/install_folder.rs): every
+        // Windows install must ship one the app recognises.
+        let icon = |line: &str| line.rsplit(['/', '\\']).next().map(|n| n.trim_end_matches('"').to_owned());
+        let zip_icons: Vec<_> = windows.lines().filter(|l| l.contains(".svg\"") && l.trim_start().starts_with("cp ")).filter_map(icon).collect();
+        let script = include_str!("../scripts/install-windows.ps1").replace("\r\n", "\n");
+        let script_icons: Vec<_> = script.lines().filter(|l| l.contains("Copy-Item") && l.contains(".svg\"")).filter_map(icon).collect();
+        for (from, icons) in [("scripts/package", &zip_icons), ("scripts/install-windows.ps1", &script_icons)] {
+            assert!(!icons.is_empty(), "{from} copies no icon beside the exe");
+            for i in icons {
+                assert!(crate::install_folder::ICONS.contains(&i.as_str()), "{from} ships {i}, which install_folder doesn't recognise");
+            }
+        }
         let readme = include_str!("../wiki/Install.md").replace("\r\n", "\n");
         assert!(readme.contains("`apollo-app.exe` opens the app") && readme.contains("gives you the `herdr-app` command"), "wiki/Install.md's Windows install text");
     }
@@ -164,6 +176,28 @@ mod tests {
         assert!(release.contains("\n  publish:\n    needs: [build, ci-passed]\n"), "publishing must wait for ci");
         assert!(!release.contains("needs.ci-passed.result == 'skipped'"), "ci-passed must never be skipped");
         assert!(release.contains("[[ \"$GITHUB_REF_NAME\" == *-* ]] && kind=--prerelease"), "a tag with a '-' is a prerelease");
+    }
+
+    /// macOS builds sign with a Developer ID and notarize once the secrets exist, and
+    /// the release says which: ad hoc, Developer ID, or Developer ID and notarized.
+    /// Only the macOS package step gets the signing secrets.
+    #[test]
+    fn release_signs_macos_when_the_secrets_exist_and_says_so() {
+        let release = include_str!("../.github/workflows/release.yml").replace("\r\n", "\n");
+        for secret in ["APPLE_CERTIFICATE_P12", "APPLE_CERTIFICATE_PASSWORD", "APPLE_API_KEY", "APPLE_API_KEY_ID", "APPLE_API_ISSUER"] {
+            let want = format!("          {secret}: ${{{{ runner.os == 'macOS' && secrets.{secret} || '' }}}}\n");
+            assert!(release.contains(&want), "release.yml must pass {secret} to scripts/package on macOS only");
+        }
+        let package = release.find("      - run: scripts/package\n").expect("release.yml runs scripts/package");
+        assert!(release[package..].starts_with("      - run: scripts/package\n        env:\n"), "the secrets belong to the package step");
+        assert!(release.contains("if [[ $SIGNED == true ]]; then s=$(codesign -dvv \"$a\" 2>&1); [[ $s == *\"Authority=Developer ID Application:\"* ]]; fi"), "a signed build must be checked for its Developer ID");
+        assert!(!release.contains("codesign -dvv \"$a\" 2>&1 | grep -q"), "grep -q after codesign's long output fails the step with SIGPIPE under pipefail");
+        assert!(release.contains("if [[ $NOTARIZED == true ]]; then xcrun stapler validate \"$a\"; fi"), "a notarized build must carry its ticket");
+        for notes in ["macOS builds are signed with a Developer ID and notarized.", "macOS builds are signed with a Developer ID but not notarized;", "macOS builds are ad-hoc signed;"] {
+            assert!(release.contains(notes), "release notes lack {notes:?}");
+        }
+        let package_script = include_str!("../scripts/package").replace("\r\n", "\n");
+        assert!(package_script.contains("  scripts/mac-sign \"$app\"\n  scripts/mac-notarize \"$app\"\n  ditto "), "scripts/package must notarize the signed app before zipping it");
     }
 
     #[test]
