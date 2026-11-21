@@ -13,8 +13,10 @@ Each release also has `SHA256SUMS` to check the download.
 ## macOS
 
 Unzip it and move `Apollo.app` to Applications.
-The build is signed ad hoc, not notarized, so the first launch is blocked.
-Right-click Apollo and choose Open, or clear the quarantine flag once:
+The release notes say how the macOS build is signed.
+A build signed with a Developer ID and notarized opens like any app.
+An ad-hoc signed build is blocked on first launch:
+right-click Apollo and choose Open, or clear the quarantine flag once:
 
 ```sh
 xattr -dr com.apple.quarantine /Applications/Apollo.app

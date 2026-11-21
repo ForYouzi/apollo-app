@@ -46,9 +46,20 @@ jobs:
       - run: scripts/zig-seed
       - if: runner.os == 'Windows'
         run: echo "LIBCLANG_PATH=C:\\Program Files\\LLVM\\bin" >> "$GITHUB_ENV"
+      # Developer ID signing and notarization turn on once these secrets exist;
+      # without them the app is signed ad hoc (scripts/mac-sign, scripts/mac-notarize).
       - run: scripts/package
+        env:
+          APPLE_CERTIFICATE_P12: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE_P12 || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_API_KEY: ${{ runner.os == 'macOS' && secrets.APPLE_API_KEY || '' }}
+          APPLE_API_KEY_ID: ${{ runner.os == 'macOS' && secrets.APPLE_API_KEY_ID || '' }}
+          APPLE_API_ISSUER: ${{ runner.os == 'macOS' && secrets.APPLE_API_ISSUER || '' }}
       - name: Check the macOS bundle (no window)
         if: runner.os == 'macOS'
+        env:
+          SIGNED: ${{ secrets.APPLE_CERTIFICATE_P12 != '' }}
+          NOTARIZED: ${{ secrets.APPLE_CERTIFICATE_P12 != '' && secrets.APPLE_API_KEY != '' }}
         run: |
           x=$(mktemp -d); ditto -x -k dist/apollo-app-*-macos-*.zip "$x"; a="$x/Apollo.app"
           test "$(plutil -extract CFBundleIdentifier raw "$a/Contents/Info.plist")" = com.foryouzi.apollo
@@ -56,6 +67,9 @@ jobs:
           cmp assets/icons/Assets.car "$a/Contents/Resources/Assets.car"
           test "$(lipo -archs "$a/Contents/MacOS/Apollo")" = "${{ matrix.arch }}"
           codesign -v "$a"
+          # Captured, not piped to grep -q: an early grep exit fails codesign with SIGPIPE under pipefail.
+          if [[ $SIGNED == true ]]; then s=$(codesign -dvv "$a" 2>&1); [[ $s == *"Authority=Developer ID Application:"* ]]; fi
+          if [[ $NOTARIZED == true ]]; then xcrun stapler validate "$a"; fi
           HERDR_APP_HOME="$x/home" "$a/Contents/MacOS/Apollo" --version | grep -qx "herdr-app $(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
       - name: Check the Windows zip (no window)
         if: runner.os == 'Windows'
@@ -91,6 +105,9 @@ jobs:
     needs: [build, ci-passed]
     runs-on: ubuntu-latest
     permissions: { contents: write }
+    env:
+      SIGNED: ${{ secrets.APPLE_CERTIFICATE_P12 != '' }}
+      NOTARIZED: ${{ secrets.APPLE_CERTIFICATE_P12 != '' && secrets.APPLE_API_KEY != '' }}
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with: { path: dist, merge-multiple: true }
@@ -98,4 +115,7 @@ jobs:
       - env: { GH_TOKEN: "${{ github.token }}" }
         run: |
           kind=--latest; [[ "$GITHUB_REF_NAME" == *-* ]] && kind=--prerelease
-          gh release create "$GITHUB_REF_NAME" dist/apollo-app-*.zip dist/SHA256SUMS --repo "$GITHUB_REPOSITORY" --verify-tag "$kind" --title "Apollo ${GITHUB_REF_NAME#v}" --notes "Apollo ${GITHUB_REF_NAME#v}. macOS builds are ad-hoc signed; see https://github.com/ForYouzi/apollo-app/wiki/Install for first launch."
+          if [[ $NOTARIZED == true ]]; then mac="macOS builds are signed with a Developer ID and notarized."
+          elif [[ $SIGNED == true ]]; then mac="macOS builds are signed with a Developer ID but not notarized; see https://github.com/ForYouzi/apollo-app/wiki/Install for first launch."
+          else mac="macOS builds are ad-hoc signed; see https://github.com/ForYouzi/apollo-app/wiki/Install for first launch."; fi
+          gh release create "$GITHUB_REF_NAME" dist/apollo-app-*.zip dist/SHA256SUMS --repo "$GITHUB_REPOSITORY" --verify-tag "$kind" --title "Apollo ${GITHUB_REF_NAME#v}" --notes "Apollo ${GITHUB_REF_NAME#v}. $mac"
