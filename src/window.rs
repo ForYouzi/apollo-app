@@ -181,6 +181,15 @@ fn default_layout(name: &str) -> Node {
     serde_json::from_str(shipped_layout(name)).expect("defaults/layouts are valid")
 }
 
+/// `Name key = value`, built rather than parsed: gpui's parser never returns
+/// on a value with a character like `.` (a mod folder `a.b`), so names go in whole.
+fn key_context(name: &'static str, key: &'static str, value: &str) -> KeyContext {
+    let mut context = KeyContext::default();
+    context.add(name);
+    context.set(key, value.to_owned());
+    context
+}
+
 fn layout_path(name: &str) -> PathBuf {
     file(&format!("layouts/{name}.json"))
 }
@@ -417,6 +426,7 @@ pub struct AppWindow {
     /// Mod copies by slot (block id, `<stack>#header`, or `overlay:<id>`).
     copies: HashMap<String, Copy>,
     overlays: Vec<Overlay>,
+    toast_scroll: ScrollHandle,
     folders: BTreeMap<String, Found>,
     link_handlers: Rc<RefCell<crate::links::Handlers>>,
     failed_link_enrollments: HashSet<String>,
@@ -544,6 +554,7 @@ impl AppWindow {
             terms: HashMap::new(),
             copies: HashMap::new(),
             overlays: Vec::new(),
+            toast_scroll: ScrollHandle::new(),
             folders: mods::scan(&BTreeMap::new()),
             link_handlers: Rc::default(),
             failed_link_enrollments: HashSet::new(),
@@ -1731,6 +1742,11 @@ impl AppWindow {
     /// else the window, where the app's keys work.
     fn restore_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let dialog = self.overlays.iter().rev().find(|o| o.kind.modal_keys()).map(|o| o.focus.clone());
+        // A dialog whose mod already focused something inside it (its input) keeps that:
+        // handing the keyboard to the frame would leave typing with nowhere to go.
+        if dialog.as_ref().is_some_and(|d| d.contains_focused(window, cx)) {
+            return;
+        }
         // A mod block holding the keyboard gets it back (a popup over it closed).
         if dialog.is_none() && self.focused_block.as_ref().is_some_and(|b| self.mod_block_shown(b)) {
             self.focus.focus(window, cx);
@@ -2696,7 +2712,8 @@ impl AppWindow {
     }
 
     /// A space with its first tab and terminal, shown at once unless focus is false.
-    /// `machine`: another machine (`hc machine ls`); its space starts in that machine's home.
+    /// `machine`: another machine (`hc machine ls`). Without `folder`, it starts in the
+    /// focused pane's folder when that pane is on the same machine, else in that machine's home.
     fn new_space(&mut self, name: &str, folder: Option<String>, ctx_name: Option<&str>, argv: Option<Vec<String>>, task: Option<&str>, machine: Option<String>, focus: bool, window: &Window) -> Result<Value, String> {
         let follow = folder.is_none();
         let on = machine.as_deref();
@@ -3987,8 +4004,13 @@ impl AppWindow {
         }
         props["overlay"] = json!(id);
         let num = |k: &str, d: f32| spec.get(k).and_then(Value::as_f64).map_or(d, |v| v as f32);
+        let bundled_toast = kind == OverlayKind::Toast && name == "toast";
+        let fit_toast = bundled_toast && spec.get("height").and_then(Value::as_f64).is_none();
+        if bundled_toast {
+            props["fitHeight"] = json!(fit_toast);
+        }
         let size = match kind {
-            OverlayKind::Toast => size(340.0, num("height", 72.0)),
+            OverlayKind::Toast => size(340.0, if fit_toast { 0.85 } else { num("height", 72.0) }),
             // No size: as big as its content (0 = unset).
             OverlayKind::Window => size(num("width", 0.0), num("height", 0.0)),
             // No height: as tall as the content, up to most of the window.
@@ -3999,7 +4021,7 @@ impl AppWindow {
             _ => self.pointer,
         };
         let top = (spec.get("at").and_then(Value::as_str) == Some("top")).then(|| num("offset", 0.0));
-        let fit = layout.is_none() && (kind == OverlayKind::Popup || (matches!(kind, OverlayKind::Dialog | OverlayKind::Window) && spec.get("height").is_none()));
+        let fit = fit_toast || (layout.is_none() && (kind == OverlayKind::Popup || (matches!(kind, OverlayKind::Dialog | OverlayKind::Window) && spec.get("height").is_none())));
         if kind == OverlayKind::Window && place.is_none() && spec.get("at").is_some_and(|v| v.get("x").is_some()) {
             place = Some(at);
         }
@@ -4048,6 +4070,9 @@ impl AppWindow {
             } else {
                 movable::forget(&self.layout_name, k);
             }
+        }
+        if kind == OverlayKind::Toast {
+            self.toast_scroll.set_offset(Point::default());
         }
         if has_layout {
             self.sync(window, cx);
@@ -4697,7 +4722,7 @@ impl AppWindow {
         match self.copies.get(slot) {
             Some(Copy { root: Some(root), inst, .. }) => div()
                 .size_full()
-                .key_context(format!("Mod mod = {}", inst.name).as_str())
+                .key_context(key_context("Mod", "mod", &inst.name))
                 .when(in_pane, |d| {
                     let id = slot.to_owned();
                     d.on_any_mouse_down(cx.listener(move |this, _, _, cx| {
@@ -4853,17 +4878,12 @@ impl AppWindow {
     }
 
     fn render_overlays(&self, viewport: Size<Pixels>, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let mut out = Vec::new();
-        let mut toast_y = 16.0;
-        // Drawn last, so it stays clickable over an open dialog.
-        let pill = self.render_update_pill(cx);
-        if pill.is_some() {
-            toast_y += UPDATE_PILL_HEIGHT + 8.0;
-        }
-        // Windows under dialogs, popups and toasts; each kind in the order opened
-        // (a window pressed last is last: on top).
-        let order = self.overlays.iter().filter(|o| o.kind == OverlayKind::Window).chain(self.overlays.iter().filter(|o| o.kind != OverlayKind::Window));
-        for o in order {
+        let mut windows = Vec::new();
+        let mut overlays = Vec::new();
+        let mut toasts = Vec::new();
+        let inset = settings::z(16.0);
+        let gap = settings::z(8.0);
+        for o in &self.overlays {
             let id = o.id.clone();
             // Up to 1: a share of the window (terminals in overlays want room, not px).
             let span = |v: f32, full: Pixels| if v <= 1.0 { full * v } else { settings::z(v) };
@@ -4873,6 +4893,7 @@ impl AppWindow {
                 Some(l) => self.render_node(l, &HashSet::new(), None, cx),
                 None => self.render_slot(&o.slot, cx),
             };
+            let fit_toast = o.kind == OverlayKind::Toast && o.fit;
             let body = div()
                 .id(SharedString::from(format!("ov-{}", o.id)))
                 .track_focus(&o.focus)
@@ -4882,14 +4903,32 @@ impl AppWindow {
                 .when(sized(o.size.height), |d| if o.fit { d.max_h(h) } else { d.h(h) })
                 .when(!o.bare, |d| d.bg(c("popover")).border_1().border_color(c("border")).rounded(settings::z(8.0)).shadow_lg())
                 .overflow_hidden()
-                .flex()
-                // Scroll, hover and cursor stop here, not on the pane behind.
+                .when(o.kind == OverlayKind::Toast && !fit_toast, |d| d.flex_none())
+                .when(fit_toast, |d| {
+                    d.min_h(settings::z(72.0).min(h))
+                        .max_w((viewport.width - inset * 2.0).max(px(1.0)))
+                        .overflow_y_scroll()
+                })
+                .when(!fit_toast, |d| d.flex())
                 .occlude()
+                // The dialog may sit between a card and the stack's scroll area.
+                .when(o.kind == OverlayKind::Toast, |d| d.on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, window, cx| {
+                    let delta = event.delta.pixel_delta(window.line_height());
+                    let dy = if delta.y.is_zero() { delta.x } else { delta.y };
+                    let scroll = &this.toast_scroll;
+                    let offset = scroll.offset();
+                    let y = (offset.y + dy).clamp(-scroll.max_offset().y, px(0.0));
+                    if y != offset.y {
+                        scroll.set_offset(point(offset.x, y));
+                        cx.notify();
+                    }
+                    cx.stop_propagation();
+                })))
                 .when(o.kind != OverlayKind::Window, |d| d.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()))
                 .child(content);
             match o.kind {
-                OverlayKind::Window => out.push(self.render_window(o, body, viewport, cx)),
-                OverlayKind::Dialog => out.push(
+                OverlayKind::Window => windows.push(self.render_window(o, body, viewport, cx)),
+                OverlayKind::Dialog => overlays.push(
                     div()
                         .absolute()
                         .inset_0()
@@ -4908,7 +4947,7 @@ impl AppWindow {
                         Some(off) => point((viewport.width - w) / 2.0, settings::z(off)),
                         None => o.at,
                     };
-                    out.push(
+                    overlays.push(
                         div()
                             .absolute()
                             .inset_0()
@@ -4922,14 +4961,15 @@ impl AppWindow {
                     );
                 }
                 OverlayKind::Toast => {
-                    out.push(div().absolute().right(settings::z(16.0)).bottom(settings::z(toast_y)).child(body).into_any_element());
-                    toast_y += o.size.height + 8.0;
+                    let (slot, card) = OverlaySlot::new(body, Some(TOAST_STACK_ID));
+                    toasts.push(slot);
+                    overlays.push(card);
                 }
             }
         }
         let core = crate::update::core();
-        if let Some(error) = core.error.filter(|error| core.managed.is_none() && self.core_update_error_dismissed.as_ref() != Some(error)) {
-            out.push(div().absolute().right(settings::z(16.0)).bottom(settings::z(toast_y))
+        let update_error = core.error.filter(|error| core.managed.is_none() && self.core_update_error_dismissed.as_ref() != Some(error)).map(|error| {
+            div().flex_none()
                 .max_w(settings::z(540.0)).p(settings::z(12.0)).rounded_lg().bg(c("popover"))
                 .border_1().border_color(c("border")).text_size(settings::z(13.0)).text_color(c("foreground"))
                 .occlude().flex().items_center().gap(settings::z(8.0))
@@ -4940,11 +4980,111 @@ impl AppWindow {
                     .flex().items_center().justify_center().rounded_full().cursor_pointer()
                     .text_color(c("dim")).hover(|s| s.bg(c("raised")).text_color(c("foreground"))).child("×")
                     .on_click(cx.listener(|this, _, w, cx| this.close_overlay("core-update-error", w, cx))))
-                .into_any_element());
-        }
-        out.extend(pill);
-        out
+        });
+        let (update_error_slot, update_error) = update_error.map(|body| OverlaySlot::new(body, None)).unzip();
+        let (update_pill_slot, update_pill) = self.render_update_pill(cx).map(|body| OverlaySlot::new(body, None)).unzip();
+        // The padding gives the cards' shadows room while keeping their positions.
+        let shadow = px(16.0);
+        windows.push(
+            div().absolute().right(inset).bottom(inset)
+                .max_h((viewport.height - inset * 2.0).max(px(0.0)))
+                .flex().flex_col().items_end().gap(gap)
+                .children(update_error_slot)
+                .when(!toasts.is_empty(), |layer| layer.child(
+                    div().id(TOAST_STACK_ID).p(shadow).m(-shadow)
+                        .min_h_0().overflow_y_scroll().track_scroll(&self.toast_scroll)
+                        .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+                        .flex().flex_col().items_end().gap(gap)
+                        .children(toasts.into_iter().rev()),
+                ))
+                .children(update_pill_slot)
+                .into_any_element(),
+        );
+        windows.extend(overlays);
+        windows.extend(update_error);
+        windows.extend(update_pill);
+        windows
     }
+}
+
+const TOAST_STACK_ID: &str = "toast-stack";
+
+// Measure cards in the scrollable stack, then draw and hit-test each card in
+// opening order with the other overlays.
+struct OverlaySlot(Rc<RefCell<Option<StackedOverlay>>>);
+
+struct StackedOverlay {
+    element: AnyElement,
+    offset: Point<Pixels>,
+    clip: Option<ContentMask<Pixels>>,
+}
+
+impl OverlaySlot {
+    fn new(element: impl IntoElement, namespace: Option<&'static str>) -> (Self, AnyElement) {
+        let slot = Self(Rc::new(RefCell::new(Some(StackedOverlay {
+            element: element.into_any_element(),
+            offset: Point::default(),
+            clip: None,
+        }))));
+        let card = slot.0.clone();
+        let draw = canvas(
+            move |_, window, cx| {
+                let mut card = card.borrow_mut().take().unwrap();
+                Self::in_stack(window, namespace, card.clip, |window| {
+                    card.element.prepaint_at(card.offset, window, cx);
+                });
+                card
+            },
+            move |_, mut card, window, cx| {
+                Self::in_stack(window, namespace, card.clip, |window| card.element.paint(window, cx));
+            },
+        ).absolute().into_any_element();
+        (slot, draw)
+    }
+
+    fn in_stack(
+        window: &mut Window,
+        namespace: Option<&'static str>,
+        clip: Option<ContentMask<Pixels>>,
+        draw: impl FnOnce(&mut Window),
+    ) {
+        window.with_content_mask(clip, |window| match namespace {
+            Some(id) => window.with_element_namespace(id, draw),
+            None => draw(window),
+        });
+    }
+}
+
+impl IntoElement for OverlaySlot {
+    type Element = Self;
+    fn into_element(self) -> Self { self }
+}
+
+impl Element for OverlaySlot {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> { None }
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> { None }
+
+    fn request_layout(
+        &mut self, _: Option<&GlobalElementId>, _: Option<&InspectorElementId>, window: &mut Window, cx: &mut App,
+    ) -> (LayoutId, ()) {
+        (self.0.borrow_mut().as_mut().unwrap().element.request_layout(window, cx), ())
+    }
+
+    fn prepaint(
+        &mut self, _: Option<&GlobalElementId>, _: Option<&InspectorElementId>, _: Bounds<Pixels>, _: &mut (), window: &mut Window, _: &mut App,
+    ) {
+        let mut slot = self.0.borrow_mut();
+        let card = slot.as_mut().unwrap();
+        card.offset = window.element_offset();
+        card.clip = Some(window.content_mask());
+    }
+
+    fn paint(
+        &mut self, _: Option<&GlobalElementId>, _: Option<&InspectorElementId>, _: Bounds<Pixels>, _: &mut (), _: &mut (), _: &mut Window, _: &mut App,
+    ) {}
 }
 
 const UPDATE_PILL_HEIGHT: f32 = 34.0;
@@ -4964,9 +5104,7 @@ impl AppWindow {
         let dismissal = update_dismissal(app_version.as_deref(), &label);
         if self.update_dismissed.as_ref() == Some(&dismissal) { return None; }
         let pill = div()
-            .absolute()
-            .right(settings::z(16.0))
-            .bottom(settings::z(16.0))
+            .flex_none()
             .h(settings::z(UPDATE_PILL_HEIGHT))
             .pl(settings::z(14.0))
             .pr(settings::z(6.0))
@@ -5449,7 +5587,7 @@ impl Render for AppWindow {
             .id("herdr")
             .track_focus(&self.focus)
             // `layout:<name>` key sections apply while that layout shows.
-            .key_context(format!("Herdr layout = {}", self.layout_name).as_str())
+            .key_context(key_context("Herdr", "layout", &self.layout_name))
             .size_full()
             .relative()
             .bg(c("background"))
@@ -7590,6 +7728,76 @@ export default class SystemToast extends View {
     }
 
     #[test]
+    fn overlapping_toasts_and_dialogs_route_input_in_opening_order() {
+        in_own_process("toast_dialog_order");
+    }
+
+    #[gpui::test]
+    fn toast_dialog_order(cx: &mut gpui::TestAppContext) {
+        use serde_json::json;
+        if !running_alone("toast_dialog_order") {
+            return;
+        }
+        let fixture = r#"import { View, div } from "gpui-kit";
+import { closeOverlay, props } from "herdr";
+export default class Fixture extends View {
+  render() {
+    return div().id("fixture").size_full().on_click(() => closeOverlay(props().overlay));
+  }
+}
+"#;
+        let layout = json!({ "id": "root", "type": "row", "toast": "layer-fixture", "children": [] });
+        let (view, cx) = open_window(cx, "layer-fixture", fixture, layout);
+        let position = cx.update(|window, _| {
+            let viewport = window.viewport_size();
+            gpui::point(viewport.width - gpui::px(100.0), viewport.height - gpui::px(64.0))
+        });
+
+        let dialog = json!({ "kind": "dialog", "mod": "layer-fixture", "width": 150, "height": 100 });
+        for (order, expected) in [(["toast", "dialog"], "toast"), (["dialog", "toast"], "dialog")] {
+            view.update_in(cx, |this, window, cx| {
+                for kind in order {
+                    let spec = match kind {
+                        "toast" => json!({ "kind": "toast", "notification": { "title": "Saved" } }),
+                        _ => dialog.clone(),
+                    };
+                    this.open_overlay(kind.into(), spec, window, cx);
+                }
+            });
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                window.simulate_next_frame(cx);
+                window.draw(cx).clear(cx);
+            });
+            cx.simulate_mouse_move(position, None, gpui::Modifiers::default());
+            cx.simulate_click(position, gpui::Modifiers::default());
+            cx.run_until_parked();
+            view.update_in(cx, |this, window, cx| {
+                let left: Vec<_> = this.overlays.iter().filter(|o| order.contains(&o.id.as_str())).map(|o| o.id.as_str()).collect();
+                assert_eq!(left, [expected], "the click goes to the later overlay");
+                this.close_overlay(expected, window, cx);
+            });
+        }
+
+        view.update_in(cx, |this, window, cx| {
+            this.open_overlay("dialog".into(), dialog, window, cx);
+            let note = json!({ "kind": "toast", "height": 94, "notification": { "title": "Saved" } });
+            for index in 0..16 {
+                this.open_overlay(format!("toast-{index}"), note.clone(), window, cx);
+            }
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position,
+            delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.0), gpui::px(-120.0))),
+            ..Default::default()
+        });
+        let scroll_y = view.update(cx, |this, _| this.toast_scroll.offset().y);
+        assert_eq!(scroll_y, gpui::px(-120.0), "the visible card scrolls the stack over the dialog");
+    }
+
+    #[test]
     fn link_runtimes_and_the_live_view_share_one_store() {
         in_own_process("link_calls_share_view_storage");
     }
@@ -7768,6 +7976,42 @@ export default class SystemToast extends View {
         });
         let saved: super::Node = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         assert_eq!(saved.link_handlers, ["existing"]);
+    }
+
+    #[test]
+    fn mods_and_layouts_named_with_any_characters_render() {
+        in_own_process("odd_names_render");
+    }
+
+    #[gpui::test]
+    fn odd_names_render(cx: &mut gpui::TestAppContext) {
+        use serde_json::json;
+        if !running_alone("odd_names_render") {
+            return;
+        }
+        let name = "zz-probe.off";
+        let probe = r#"import { View, div } from "gpui-kit";
+export default class Probe extends View { render() { return div().child("probe"); } }
+"#;
+        let layout = json!({
+            "id": "root", "type": "row",
+            "children": [{"id": "block", "type": "block", "content": {"mod": name}}],
+            "floating": [{"id": "float", "content": {"mod": name}}]
+        });
+        let (view, cx) = open_window(cx, name, probe, layout.clone());
+        view.update_in(cx, |this, window, cx| this.run("mod.open", json!({ "name": name }), window, cx));
+        cx.run_until_parked();
+        std::fs::write(crate::mods::app_dir().join("layouts/my.copy.json"), layout.to_string()).unwrap();
+        view.update_in(cx, |this, window, cx| {
+            this.load_layout("my.copy");
+            this.sync(window, cx);
+        });
+        cx.run_until_parked();
+        view.update(cx, |this, _| {
+            assert_eq!(this.layout_name, "my.copy");
+            let mounted: Vec<&str> = this.copies.iter().filter(|(_, c)| c.inst.name == name && c.root.is_some()).map(|(slot, _)| slot.as_str()).collect();
+            assert_eq!(mounted.len(), 3, "block, float and popup: {mounted:?}");
+        });
     }
 
     #[test]
