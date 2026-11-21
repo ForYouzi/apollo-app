@@ -1,6 +1,7 @@
 // Vendored from SonicTerm (https://github.com/D0n9X1n/SonicTerm, MIT),
 // crates/sonicterm-cfg/src/url_scan*.rs at 07b5c1f665e2b2af74eda1a3116c1cda23d24f8a,
-// with its tests. Only `crate::url_open` became `super::url_open`; keep the
+// with its tests; `is_url` and its test come from SonicTerm origin/main
+// 3284d2e9. Only `crate::url_open` became `super::url_open`; keep the
 // files as they are so a later SonicTerm change can be copied over.
 //! Plain-text URL detection for terminal grid rows.
 //!
@@ -202,6 +203,15 @@ pub fn find_urls(text: &str) -> Vec<UrlMatch> {
         start = end.max(start + 1);
     }
     out
+}
+
+/// Whether `url`, whole and untrimmed, is a URL detection recognises: an allowed scheme and no
+/// forbidden character. A caller that knows a URL's exact extent from its delimiters (a markdown
+/// `](`…`)` destination, a quoted argument) checks that text as is, where [`find_urls`] would trim
+/// a closing `)` the URL itself holds.
+#[must_use]
+pub fn is_url(url: &str) -> bool {
+    check_uri(url, SCHEMES).is_ok()
 }
 
 /// Return the URL covering byte offset `byte_col`, if any.

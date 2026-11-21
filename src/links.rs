@@ -14,7 +14,7 @@ mod system;
 #[allow(dead_code, deprecated)]
 mod url_open;
 #[allow(dead_code, deprecated, unused_imports)]
-mod url_scan;
+pub(crate) mod url_scan;
 
 pub use activation::{Opener, activate, safe_folder};
 /// What a click on a link means, without carrying it out.

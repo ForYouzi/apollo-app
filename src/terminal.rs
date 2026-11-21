@@ -1152,6 +1152,11 @@ impl TerminalView {
         use vt::LinkScan;
         let ctx = links::Ctx::new(self.cwd.clone());
         let hit = g.vt.link_at(col as u16, row as u16, |text, at, scan| {
+            if scan == LinkScan::Exact {
+                // A URL a program broke across rows, proven whole: open it as it is, untrimmed.
+                target = Some(LinkTarget::External(links::resolved(text, links::resolve(text, cwd)).click(remote, &active)?));
+                return Some(0..text.len());
+            }
             if scan == LinkScan::Unresolved {
                 // A path that leads nowhere here: only for a mod's link rules, its longest reading.
                 if active.is_empty() {
@@ -2929,6 +2934,24 @@ mod tests {
             assert_eq!(file.native, Some(links::Target::File(joined)));
         });
         std::fs::remove_dir_all(cwd).unwrap();
+    }
+
+    #[gpui::test]
+    fn terminal_link_opens_a_proven_box_url_untrimmed(cx: &mut gpui::TestAppContext) {
+        use super::{LinkTarget, TerminalView};
+        use crate::links;
+        use gpui::*;
+
+        let view = cx.new(|cx| TerminalView::attach(crate::hc::offline(), "t1".into(), (60, 6), cx));
+        view.update(cx, |view, _| {
+            // A replaced line proves Claude Code's diff box; its quotes end the URL after the `!`.
+            let rows = "      1 - get \"https://example.test/old\"\r\n      1 + get \"https://example.test/aaaa\r\n        +bbbb!\"";
+            view.grid.borrow_mut().vt.write(rows.as_bytes());
+            for (col, row) in [(20.0, 1.0), (10.0, 2.0)] {
+                let Some((LinkTarget::External(url), _)) = view.link_at(point(px(9.0 * col + 1.0), px(18.0 * row + 1.0))) else { panic!("no link at {col},{row}") };
+                assert_eq!(url.native, Some(links::Target::Url("https://example.test/aaaabbbb!".into())), "{col},{row}");
+            }
+        });
     }
 
     #[gpui::test]

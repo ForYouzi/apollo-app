@@ -1,15 +1,15 @@
 //! URLs a program broke across rows, joined: SonicTerm's hard-wrap cases
-//! (`path_target_hardwrap_uri_tests.rs`, `path_target_hardwrap_markdown_tests.rs`
-//! at 68250eef) on Apollo's grid. Cases that test SonicTerm-only parts (its
-//! pane borders, preview state, settings, frame observer) are left out.
+//! (`path_target_hardwrap_uri_tests.rs` at 68250eef) on Apollo's grid. The
+//! numbered-box cases are in `hardwrap_box*_tests.rs`. Cases that test
+//! SonicTerm-only parts (its pane borders, preview state, settings, frame
+//! observer) are left out.
 
 use super::super::Vt;
-use super::{MAX_LINK_BYTES, MAX_LINK_ROWS};
+use super::MAX_LINK_ROWS;
 
 const ISSUE_URI: &str = "https://github.com/D0n9X1n/SonicTerm/issues/1349";
 const HARDWRAP_HEAD: &str = "* Done: #1349 (";
 const LONG_URI: &str = "https://example.com/aaaaaaaaaa/bbbbbbbbbb/cccccccccc/dddddddddd";
-const DOC_URI: &str = "https://github.com/D0n9X1n/bufferlines.nvim/wiki/Installation-and-Usage-zh-CN";
 
 /// `uri` after `head`, cut at `cols` and continued at each indent, `closer` after the last part.
 fn hardwrap_lines(cols: usize, head: &str, uri: &str, indents: &[usize], closer: char) -> Vec<String> {
@@ -29,38 +29,30 @@ fn hardwrap_lines(cols: usize, head: &str, uri: &str, indents: &[usize], closer:
     lines
 }
 
-/// Display cells `s` takes: CJK and fullwidth punctuation take two.
-fn width(s: &str) -> usize {
-    s.chars().map(|c| if ('\u{1100}'..).contains(&c) && !('\u{300}'..='\u{36f}').contains(&c) { 2 } else { 1 }).sum()
-}
-
-/// `lines` padded with blanks to `content` cells, as a box draws them.
-fn padded(lines: &[&str], content: usize) -> Vec<String> {
-    lines
-        .iter()
-        .map(|line| {
-            assert!(width(line) <= content, "line wider than the box: {line}");
-            format!("{line}{}", " ".repeat(content - width(line)))
-        })
-        .collect()
-}
-
 /// A `cols` × `rows` terminal a program wrote `lines` to as hard rows.
-fn hard(cols: u16, rows: u16, lines: &[String]) -> Vt {
+pub(super) fn hard(cols: u16, rows: u16, lines: &[String]) -> Vt {
     let mut vt = Vt::new(cols, rows);
     vt.write(lines.join("\r\n").as_bytes());
     vt
 }
 
-/// What the app links at a cell, as `links::pick` decides from no folder.
-fn at(vt: &Vt, row: u16, col: u16) -> Option<String> {
+/// What the app's `link_at` callback does with no folder: `links::pick`, and
+/// the whole text for a URL the rows proved exactly.
+pub(super) fn pick(text: &str, at: usize, scan: crate::vt::LinkScan) -> Option<std::ops::Range<usize>> {
+    if scan == crate::vt::LinkScan::Exact {
+        return Some(0..text.len());
+    }
     let ctx = crate::links::Ctx::new(None);
-    vt.link_at(col, row, |text, at, scan| crate::links::pick(text, at, scan == crate::vt::LinkScan::Joined, &ctx, |_| None).map(|(r, _)| r)).map(|hit| hit.target)
+    crate::links::pick(text, at, scan == crate::vt::LinkScan::Joined, &ctx, |_| None).map(|(r, _)| r)
 }
 
-fn spans(vt: &Vt, row: u16, col: u16) -> Vec<(u16, u16, u16)> {
-    let ctx = crate::links::Ctx::new(None);
-    vt.link_at(col, row, |text, at, scan| crate::links::pick(text, at, scan == crate::vt::LinkScan::Joined, &ctx, |_| None).map(|(r, _)| r)).map_or(Vec::new(), |hit| hit.spans.to_vec())
+/// What the app links at a cell.
+pub(super) fn at(vt: &Vt, row: u16, col: u16) -> Option<String> {
+    vt.link_at(col, row, pick).map(|hit| hit.target)
+}
+
+pub(super) fn spans(vt: &Vt, row: u16, col: u16) -> Vec<(u16, u16, u16)> {
+    vt.link_at(col, row, pick).map_or(Vec::new(), |hit| hit.spans.to_vec())
 }
 
 // ---- a wrapper opened at the pane edge -------------------------------------
@@ -254,205 +246,4 @@ fn hardwrap_row_bound_leaves_a_longer_chain_unjoined() {
     assert_eq!(lines.len(), MAX_LINK_ROWS + 1);
     let vt = hard(32, MAX_LINK_ROWS as u16 + 2, &lines);
     assert_ne!(at(&vt, 0, 10).as_deref(), Some(uri.as_str()));
-}
-
-// ---- Claude Code's padded, numbered box -------------------------------------
-
-#[test]
-fn padded_markdown_target_joins_across_hanging_indent() {
-    let cut = DOC_URI.find("Usag").unwrap() + "Usag".len();
-    let first = format!("    60 [安装]({}", &DOC_URI[..cut]);
-    let first_cols = width(&first) as u16;
-    let tail_len = (DOC_URI.len() - cut) as u16;
-    // `    60 [安装](`: seven gutter cells, `[`, two wide cells, `]`, `(`.
-    let start = 14u16;
-    for tail in [")。", ") 。", ")", ")。其他"] {
-        let second = format!("       {}{tail}", &DOC_URI[cut..]);
-        let vt = hard(100, 10, &padded(&[&first, &second], first_cols as usize + 8));
-        let pointers = (start..first_cols).map(|c| (0, c)).chain((7..7 + tail_len).map(|c| (1, c)));
-        for (row, col) in pointers {
-            assert_eq!(at(&vt, row, col).as_deref(), Some(DOC_URI), "tail {tail:?} row {row} col {col}");
-            assert_eq!(spans(&vt, row, col), vec![(0, start, first_cols - 1), (1, 7, 7 + tail_len - 1)], "tail {tail:?}");
-        }
-        assert_eq!(at(&vt, 1, 7 + tail_len), None, "the closer isn't the link's: tail {tail:?}");
-    }
-}
-
-#[test]
-fn padded_markdown_issue_shapes_join() {
-    // The issue's shapes: a numbered row, and a `+` diff row with prose before the link.
-    let cut = DOC_URI.find("Usag").unwrap() + 4;
-    let vt = hard(110, 10, &padded(&[&format!("    60 [安装与使用]({}", &DOC_URI[..cut]), &format!("       {})。", &DOC_URI[cut..])], 95));
-    assert_eq!(at(&vt, 0, 30).as_deref(), Some(DOC_URI));
-    assert_eq!(at(&vt, 1, 9).as_deref(), Some(DOC_URI));
-    let nf = "https://github.com/ryanoasis/nerd-fonts/wiki";
-    let cut = nf.find("nerd-fon").unwrap() + 8;
-    let vt = hard(90, 10, &padded(&[&format!("    59 +… [Nerd Font]({}", &nf[..cut]), &format!("       +{})。…", &nf[cut..])], 70));
-    assert_eq!(at(&vt, 0, 30).as_deref(), Some(nf));
-    assert_eq!(at(&vt, 1, 9).as_deref(), Some(nf));
-}
-
-#[test]
-fn padded_markdown_target_joins_three_rows() {
-    let uri = "https://example.com/aaaaaaaaaa/bbbbbbbbbb/cccccccccc/dddddddddd/eeeeeeeeee";
-    let first = format!("  1 [doc]({}", &uri[..30]);
-    let middle_len = first.len() - 4;
-    let middle = format!("    {}", &uri[30..30 + middle_len]);
-    let last = format!("    {}).", &uri[30 + middle_len..]);
-    let vt = hard(90, 10, &padded(&[&first, &middle, &last], first.len() + 6));
-    for (row, col) in [(0, 12), (1, 4), (2, 5)] {
-        assert_eq!(at(&vt, row, col).as_deref(), Some(uri), "row {row}");
-        assert_eq!(spans(&vt, row, col).len(), 3, "row {row}");
-    }
-}
-
-#[test]
-fn padded_markdown_target_skips_repeated_diff_sign() {
-    let uri = "https://github.com/ryanoasis/nerd-fonts/wiki";
-    let first = format!("    59 +see [Nerd Font]({}", &uri[..38]);
-    let second = format!("       +{}) and more", &uri[38..]);
-    let vt = hard(90, 10, &padded(&[&first, &second], first.len() + 7));
-    for (row, col) in [(0, 30), (1, 9)] {
-        assert_eq!(at(&vt, row, col).as_deref(), Some(uri), "row {row}");
-    }
-    assert_eq!(at(&vt, 1, 7), None, "the repeated sign is gutter");
-    // The whole URL fits on the first row and the next holds only the closer.
-    let whole = "https://github.com/ryanoasis/nerd-fonts";
-    let first = format!("    59 +see [Nerd Font]({whole}");
-    let vt = hard(90, 10, &padded(&[&first, "       +)。其他插件"], first.len() + 7));
-    assert_eq!(at(&vt, 0, 30).as_deref(), Some(whole));
-}
-
-#[test]
-fn padded_markdown_refusals_keep_single_row_detection() {
-    let prefix = "https://example.com/aaaa/bbbb";
-    let cases: [(&str, String, String, &str); 10] = [
-        ("plain paren", format!("    1 see ({prefix}"), "      cccc)".into(), prefix),
-        ("no gutter", format!("See [x]({prefix}"), "    cccc) next item".into(), prefix),
-        ("comma", format!("  1 [a]({prefix},"), "    cccc)".into(), prefix),
-        ("gutter row", format!("    60 [a]({prefix}"), "    61)".into(), prefix),
-        ("unaligned", format!("  1 [a]({prefix}"), "     cccc)".into(), prefix),
-        ("space", format!("  1 [a]({prefix}"), "    cc cc)".into(), prefix),
-        ("second scheme", format!("  1 [a]({prefix}"), "    https://b.test/x)".into(), prefix),
-        ("other sign", format!("    59 +[a]({prefix}"), "       -cccc)".into(), prefix),
-        ("unexpected sign", format!("    59 [a]({prefix}"), "      +cccc)".into(), prefix),
-        ("split authority", "  1 [a](https://good.test".into(), "    @evil.test/cccc)".into(), "https://good.test"),
-    ];
-    for (label, first, second, row_url) in cases {
-        let vt = hard(90, 10, &padded(&[&first, &second], first.len() + 6));
-        let col = first.find("https").unwrap() as u16 + 2;
-        assert_eq!(at(&vt, 0, col).as_deref(), Some(row_url), "{label}");
-        assert!(at(&vt, 1, 8).is_none_or(|t| !t.starts_with(row_url)), "{label} continuation");
-    }
-}
-
-#[test]
-fn padded_markdown_refuses_unsafe_opener() {
-    let vt = hard(60, 10, &padded(&["  1 [a](\u{301}https://example.com/aaaa/bbbb", "    cccc)"], 40));
-    for (row, col) in [(0, 12), (1, 5)] {
-        assert!(at(&vt, row, col).is_none_or(|t| !t.contains("cccc")), "row {row}");
-    }
-}
-
-#[test]
-fn padded_markdown_refuses_soft_wrap_after_first_continuation() {
-    let first = "  1 [x](https://example.test/aaaaaaaa";
-    let middle = format!("    {}   ", "b".repeat(first.len() - 4));
-    let mut vt = Vt::new(40, 10);
-    vt.write(format!("{first}\r\n{middle}    cc)").as_bytes());
-    assert!(at(&vt, 0, 12).is_none_or(|t| !t.contains("bbb")));
-}
-
-#[test]
-fn padded_markdown_refuses_closer_that_wraps_on() {
-    let mut vt = Vt::new(40, 10);
-    vt.write(format!("  1 [x](https://example.test/a\r\n    {})tail)", "b".repeat(35)).as_bytes());
-    assert!(at(&vt, 0, 12).is_none_or(|t| !t.contains("bbb")));
-}
-
-#[test]
-fn padded_markdown_never_joins_hyperlinked_fragment() {
-    let first = "  1 [x](https://example.test/aaaa/bbbb";
-    let vt = hard(60, 10, &[format!("{first}{}\r\n    \x1b]8;;https://declared.test/\x1b\\cccc\x1b]8;;\x1b\\)", " ".repeat(6))]);
-    assert_eq!(at(&vt, 1, 5).as_deref(), Some("https://declared.test/"));
-    assert!(at(&vt, 0, 12).is_none_or(|t| !t.contains("cccc")));
-}
-
-#[test]
-fn padded_markdown_structural_cells_must_be_plain() {
-    let combining = |c: char| format!("{c}\u{301}");
-    let linked = |c: char| format!("\x1b]8;;https://declared.test/\x1b\\{c}\x1b]8;;\x1b\\");
-    let mutations: [(&str, &dyn Fn(char) -> String); 2] = [("combining", &combining), ("hyperlink", &linked)];
-    for marked in ["first sign", "]", "(", ")", "second sign"] {
-        for (label, mutate) in mutations {
-            let cell = |pos: &str, c: char| if pos == marked { mutate(c) } else { c.to_string() };
-            let first = format!(
-                "    59 {}see [Nerd Font{}{}https://github.com/ryanoasis/nerd-fon{}",
-                cell("first sign", '+'),
-                cell("]", ']'),
-                cell("(", '('),
-                " ".repeat(7)
-            );
-            let second = format!("       {}ts/wiki{} and more", cell("second sign", '+'), cell(")", ')'));
-            let vt = hard(90, 10, &[first, second]);
-            for (row, col) in [(0, 30), (1, 9)] {
-                assert!(at(&vt, row, col).is_none_or(|t| !t.contains("nerd-fonts/wiki")), "{label} on {marked} at row {row}");
-            }
-        }
-    }
-    let first = format!("    59 +see [Nerd Font](https://github.com/ryanoasis/nerd-fon{}", " ".repeat(7));
-    let vt = hard(90, 10, &[first, "       +ts/wiki) and more".into()]);
-    assert_eq!(at(&vt, 1, 9).as_deref(), Some("https://github.com/ryanoasis/nerd-fonts/wiki"));
-}
-
-#[test]
-fn padded_markdown_middle_row_must_end_at_the_cut() {
-    let first = "  1 [doc](https://example.com/aaaa/bbbb";
-    // Past the first row's cut, or short of it: either way not one target.
-    for middle_len in [first.len() - 4 + 3, 4] {
-        let middle = format!("    {}", "c".repeat(middle_len));
-        let vt = hard(90, 10, &padded(&[first, &middle, "    more)."], first.len() + 8));
-        assert_eq!(at(&vt, 0, 12).as_deref(), Some("https://example.com/aaaa/bbbb"), "middle {middle_len}");
-    }
-}
-
-/// A chain `rows` long in a padded box `cols` wide, and the URL it holds.
-fn padded_chain(cols: usize, middle_rows: usize, last_body: &str) -> (Vec<String>, String) {
-    let head = "  1 [x](https://example.test/";
-    let first = format!("{head}{}", "a".repeat(cols - 1 - head.len()));
-    let middle = format!("    {}", "b".repeat(first.len() - 4));
-    let mut uri = first[8..].to_string();
-    let mut lines = vec![first];
-    for _ in 0..middle_rows {
-        uri.push_str(&middle[4..]);
-        lines.push(middle.clone());
-    }
-    uri.push_str(last_body);
-    lines.push(format!("    {last_body})"));
-    (lines, uri)
-}
-
-#[test]
-fn padded_markdown_enforces_row_bound() {
-    for (total, joins) in [(MAX_LINK_ROWS, true), (MAX_LINK_ROWS + 1, false)] {
-        let (lines, uri) = padded_chain(50, total - 2, "zz");
-        let lines = padded(&lines.iter().map(String::as_str).collect::<Vec<_>>(), 49);
-        let vt = hard(60, 40, &lines);
-        let got = at(&vt, 0, 12);
-        assert_eq!(got.as_deref() == Some(uri.as_str()), joins, "rows {total}: {got:?}");
-        assert!(joins || got.is_none_or(|t| !t.contains("zz")));
-    }
-}
-
-#[test]
-fn padded_markdown_enforces_byte_bound() {
-    for (extra, joins) in [(0usize, true), (1, false)] {
-        let (probe, _) = padded_chain(140, 29, "");
-        let fixed = probe[0].len() - 8 + 29 * (probe[1].len() - 4);
-        let (lines, uri) = padded_chain(140, 29, &"z".repeat(MAX_LINK_BYTES - fixed + extra));
-        assert_eq!(uri.len(), MAX_LINK_BYTES + extra);
-        let lines = padded(&lines.iter().map(String::as_str).collect::<Vec<_>>(), 139);
-        let got = at(&hard(150, 40, &lines), 0, 12);
-        assert_eq!(got.as_deref() == Some(uri.as_str()), joins, "extra {extra}");
-    }
 }
