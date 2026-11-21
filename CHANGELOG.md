@@ -1,5 +1,16 @@
 # Apollo changelog
 
+## [0.0.9] - 2026-11-21
+
+Takes Herdr's later changes up to 317e673: the Files preview and Changes diff follow `font_size`, toasts grow to show their whole text, a peeked terminal stays on its own machine, bare repos in `<project>/.bare` take their project's name, cursor:// and vscode:// remote links open on click, the command palette offers the themes that fit the window, BoldCreate and swival as built-in agents, and emoji in agent names. (#34)
+
+### New
+- **URLs that Claude Code wraps inside its numbered diff and markdown boxes open whole.** Click any row of a long URL, whether it's quoted, in parentheses, in a link, in a comment or bare, or in a diff whose `+`/`-` repeats on every row. A URL Apollo can't prove whole opens nothing, never a cut-off part. Same as SonicTerm. (#36)
+- **macOS releases can be signed with a Developer ID and notarized.** The release does it once the repository has the signing secrets, and its notes say how each build is signed. This release is still signed ad hoc. (#35)
+
+### Fixed
+- **On Windows, a zip install no longer keeps its folder locked.** Apollo leaves the folder at start, so you can replace it with a newer version while Apollo runs. (#33, #35)
+
 ## [0.0.8] - 2026-11-17
 
 Takes Herdr's later changes up to 4deb605: `pane.rename`, keyboard pane resizing with `pane.resize`, a remote paste that shows it is still sending, and mods that handle terminal links (`link.js`). (#30)
