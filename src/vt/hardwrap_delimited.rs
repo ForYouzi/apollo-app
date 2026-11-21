@@ -2,7 +2,7 @@
 //! holds whole: SonicTerm's `path_target_hardwrap_delimited.rs` (origin/main 3284d2e9).
 
 use super::url_scan::{self, UrlMatch};
-use super::{At, BoxRows, Joined, box_blank, url_body_char};
+use super::{At, BoxRows, Joined, LineByte, box_blank, cell_line_byte, cont, orphan_wide_cont, url_body_char};
 
 /// What a URL's opening delimiter says about its extent.
 pub(super) enum Delimited {
@@ -97,6 +97,19 @@ pub(super) fn row_local_uri(rows: &mut BoxRows<'_>, pointed: At) -> Option<Joine
     let pointer = usize::from(pointed.col);
     let found = url_scan::find_url_at(&text, pointer)?;
     let bytes = text.as_bytes();
+    // A cell that may hide URL text is unknown, not a blank (stricter than SonicTerm): when the
+    // URL's token, run over such cells, holds one, the row cannot show the URL whole.
+    let hidden = |column: usize| {
+        let cell = &row.cells[column];
+        let lead = column.checked_sub(1).map(|lead| &row.cells[lead]);
+        if cont(cell) { orphan_wide_cont(cell, lead) } else { !cell.plain() && cell_line_byte(cell) == LineByte::Unsafe }
+    };
+    let in_token = |index: usize| url_body_char(bytes[index] as char) || hidden(index);
+    let token_from = (0..found.start).rev().find(|index| !in_token(*index)).map_or(0, |index| index + 1);
+    let token_to = (found.start..bytes.len()).find(|index| !in_token(*index)).unwrap_or(bytes.len());
+    if (token_from..token_to).any(hidden) {
+        return None;
+    }
     let token_end = (found.start..bytes.len()).find(|index| !url_body_char(bytes[*index] as char)).unwrap_or(bytes.len());
     if found.start <= first_text {
         // The scheme opens the row's text: the row above may run into it.

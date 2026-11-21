@@ -6,7 +6,7 @@
 //! cells read, since Apollo reads whole rows.
 
 use super::hardwrap_box_tests::{assert_joined, box_line, decide_in_frame, gutter, joined_url, reads, target_at, url_spans, with_next};
-use super::hardwrap_tests::{at, hard};
+use super::hardwrap_tests::{at, hard, spans};
 use super::{Joined, MAX_LINK_BYTES, MAX_LINK_ROWS, numbered};
 
 /// A long URL in a quoted command argument, as Claude Code's diff view shows it.
@@ -481,4 +481,57 @@ fn quoted_box_url_opens_exactly_as_its_quotes_end_it() {
             assert_eq!(at(&vt, row, col), None, "{uri}: row {row} col {col}");
         }
     }
+}
+
+/// QA finding 1: the pointer on an unsafe cell (here a combining mark) inside a box URL the rows
+/// break opens nothing, never the prefix before that cell.
+#[test]
+fn pointer_on_an_unsafe_cell_of_a_broken_url_opens_nothing() {
+    let lines = [
+        "      1 - get \"https://example.test/old\"".to_string(),
+        "      1 + get \"https://example.test/aaax\u{301}".to_string(),
+        "        +bbbb\"".to_string(),
+    ];
+    let vt = hard(60, 6, &lines);
+    assert_eq!(at(&vt, 1, 39), None);
+}
+
+/// QA finding 2: an unsafe cell is unknown text, never a blank, so a URL right after one on a
+/// continuation may be the rest of the URL above it: it opens nothing.
+#[test]
+fn url_after_an_unsafe_cell_on_a_continuation_opens_nothing() {
+    let lines = [
+        "      1 - get \"https://example.test/old\"".to_string(),
+        "      1 + get \"https://example.test/aaaa".to_string(),
+        "        +x\u{301}(https://evil.test/x)\"".to_string(),
+    ];
+    let vt = hard(60, 6, &lines);
+    assert_eq!(at(&vt, 2, 13), None);
+}
+
+/// QA finding 3: outside a proven box a URL one row holds is the single-row rules', exactly as
+/// before the box rule; inside a proven box the URL its quotes fix opens exactly, `!` included.
+#[test]
+fn one_row_url_outside_a_proven_box_reads_as_before() {
+    for line in ["  1 get \"https://example.test/x!\"", "see \"https://example.test/x!\" ok"] {
+        let vt = hard(60, 6, &[line.to_string()]);
+        let col = line.find("https").unwrap() as u16 + 2;
+        assert_eq!(at(&vt, 0, col).as_deref(), Some("https://example.test/x"), "{line:?}");
+    }
+    let lines = ["      1 - get \"https://example.test/old\"".to_string(), "      1 + get \"https://example.test/x!\" ok".to_string()];
+    let vt = hard(60, 6, &lines);
+    assert_eq!(at(&vt, 1, 20).as_deref(), Some("https://example.test/x!"));
+    assert_eq!(spans(&vt, 1, 20), vec![(1, 15, 37)]);
+}
+
+/// QA finding 3, the rebuilt-line path: in a box the rows do not prove (one line number), a
+/// destination whose `](` ends the row above sits whole on its own row; it opens what the
+/// single-row rules open for that row, never the box's exact reading.
+#[test]
+fn one_row_destination_in_an_unproven_box_reads_as_before() {
+    let second = "        https://example.test/x!)".to_string();
+    let lines = ["      1 see the documentation for this at [docs](".to_string(), second.clone()];
+    let alone = at(&hard(60, 6, &[second]), 0, 12);
+    assert!(alone.is_some(), "the row alone opens a link");
+    assert_eq!(at(&hard(60, 6, &lines), 1, 12), alone);
 }

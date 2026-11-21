@@ -505,10 +505,6 @@ pub(super) fn numbered(vt: &Vt, y: u32, x: u16, top: u32) -> Joined {
         }
         LineHead::Outside => return Joined::None,
     };
-    if let Some(decided) = row_local_uri(&mut rows, pointed) {
-        // The pointed row alone holds the URL whole: no refusal for wrapped URLs applies.
-        return decided;
-    }
     let evidence = box_evidence(&mut rows, pointed.row, gutter_end);
     // A replaced line, or signed rows beside context rows, proves a diff.
     let diff_proven = evidence.replaced_line || (evidence.signed_row && evidence.context_row);
@@ -516,6 +512,11 @@ pub(super) fn numbered(vt: &Vt, y: u32, x: u16, top: u32) -> Joined {
     // there: numbered tool output whose rows happen to share a width shows a row that reaches it
     // and ends, and never signs its rows beside unsigned ones.
     let proven = evidence.replaced_line || (evidence.consecutive && (evidence.cut_wrapped || diff_proven));
+    if let Some(decided) = row_local_uri(&mut rows, pointed) {
+        // The pointed row alone holds the URL whole: no refusal for wrapped URLs applies. Outside a
+        // proven box it stays the single-row rules', as before this rule (stricter than SonicTerm).
+        return if proven { decided } else { Joined::None };
+    }
     if !proven && narrower_gutter_nearby(&mut rows, pointed.row, gutter_end) {
         // A narrower gutter nearby shows the head was misread.
         return Joined::Unproven;
@@ -575,6 +576,8 @@ pub(super) fn numbered(vt: &Vt, y: u32, x: u16, top: u32) -> Joined {
     // close on one row reads the same in every layout.
     match decided {
         Some(Joined::Whole(parts)) if unreadable && parts.len() > 1 => Joined::Unproven,
+        // Outside a proven box a one-row URL stays the single-row rules' (stricter than SonicTerm).
+        Some(Joined::Whole(parts)) if !proven && parts.len() == 1 => Joined::None,
         Some(decided) => decided,
         None => Joined::Unproven,
     }
@@ -832,6 +835,8 @@ fn box_line_uri(rows: &mut BoxRows<'_>, line: &BoxLine, pointed: At) -> Joined {
     let mut text = String::new();
     let mut bytes = Vec::new();
     let mut byte_rows = Vec::new();
+    // The cell each byte came from; `None` for a blank the rebuild adds between rows.
+    let mut byte_cells = Vec::new();
     for row_number in line.first_row..=line.last_row {
         let Some(row) = rows.get(row_number) else { return Joined::None };
         let start_col = line.layout.text_start(row, line.gutter_end);
@@ -841,6 +846,7 @@ fn box_line_uri(rows: &mut BoxRows<'_>, line: &BoxLine, pointed: At) -> Joined {
             text.push(' ');
             bytes.push(LineByte::Blank);
             byte_rows.push(row_number);
+            byte_cells.push(None);
         }
         for column in start_col.unwrap_or(row_last + 1)..=row_last {
             let byte = match row.cells.get(column) {
@@ -861,15 +867,19 @@ fn box_line_uri(rows: &mut BoxRows<'_>, line: &BoxLine, pointed: At) -> Joined {
             text.push(if let LineByte::Text(..) = byte { row.cells[column].ch } else { ' ' });
             bytes.push(byte);
             byte_rows.push(row_number);
+            byte_cells.push(Some((row_number, column as u16)));
         }
         if row_number < line.last_row && row_last < line.cut_end {
             // A row above the last that stops before the cut ended at a blank in the source.
             text.push(' ');
             bytes.push(LineByte::Blank);
             byte_rows.push(row_number);
+            byte_cells.push(None);
         }
     }
-    let Some(pointed_byte) = bytes.iter().position(|byte| *byte == LineByte::Text(pointed.row, pointed.col)) else {
+    // An unsafe cell under the pointer belongs to the token too, so a URL holding it is refused,
+    // never left to a single-row prefix (stricter than SonicTerm, which reads text cells only).
+    let Some(pointed_byte) = byte_cells.iter().position(|cell| *cell == Some((pointed.row, pointed.col))) else {
         // The pointer is on padding, the gutter or a sign.
         return Joined::None;
     };
