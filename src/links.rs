@@ -26,8 +26,9 @@ pub use system::SystemOpener;
 pub use url_scan::PathStyle;
 use url_scan::DetectedTarget;
 
-/// URL schemes Apollo links besides SonicTerm's (http, https, mailto, file://), from Ghostty's pattern.
-const EXTRA_SCHEMES: [&str; 12] = ["ftp://", "ssh://", "ssh:", "git://", "tel:", "magnet:", "ipfs://", "ipns://", "gemini://", "gopher://", "news:", "file:"];
+/// URL schemes Apollo links besides SonicTerm's (http, https, mailto, file://), from Ghostty's
+/// pattern, plus the editor remote schemes (`cursor://vscode-remote/...`, `vscode://vscode-remote/...`).
+const EXTRA_SCHEMES: [&str; 14] = ["ftp://", "ssh://", "ssh:", "git://", "tel:", "magnet:", "ipfs://", "ipns://", "gemini://", "gopher://", "news:", "file:", "cursor://", "vscode://"];
 
 /// Apollo's other-scheme URLs in `text`: not after a word, `.`, `/`, `-` or `:`
 /// (`xftp://`); Ghostty's URL characters, with brackets the URL opened and
@@ -1537,6 +1538,20 @@ mod tests {
         let ctx = Ctx::new(None);
         assert_eq!(pick("file:///apollo-gone/x", 0, true, &ctx, |_| None), None);
         assert!(pick("file:///apollo-gone/x", 0, false, &ctx, |_| None).is_some());
+    }
+
+    #[test]
+    fn editor_remote_links_keep_their_whole_uri() {
+        for url in [
+            "cursor://vscode-remote/ssh-remote+dev_host/data/1/user/my_project",
+            "vscode://vscode-remote/ssh-remote+dev_host/data/1/user/my_project",
+        ] {
+            let text = format!("Open {url} to continue.");
+            let at = text.find(url).unwrap();
+            let range = find(&text, at).unwrap();
+            assert_eq!(&text[range.clone()], url);
+            assert_eq!(native_target(&text[range], None), Some(Target::Url(url.into())));
+        }
     }
 
     #[test]
