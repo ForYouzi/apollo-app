@@ -29,6 +29,7 @@ mod mod_files;
 mod process_cwd;
 mod programs;
 mod remote_shell;
+mod resume;
 mod settings;
 mod setup;
 mod sound;

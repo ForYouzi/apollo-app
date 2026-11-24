@@ -460,6 +460,11 @@ pub struct AppWindow {
     watched: Watched,
     /// Core's terminal records by address.
     live: HashMap<String, Value>,
+    /// Agent resume (resume.rs): a pass running, terminals and conversations
+    /// being resumed, and when the last pass started.
+    resume_busy: Arc<std::sync::Mutex<HashSet<String>>>,
+    resume_running: bool,
+    resume_at: Option<Instant>,
     listed_once: bool,
     /// Live folders by address (from the shell process).
     cwds: HashMap<String, String>,
@@ -577,6 +582,9 @@ impl AppWindow {
             looked: HashMap::new(),
             watched: Watched::default(),
             live: HashMap::new(),
+            resume_busy: Arc::default(),
+            resume_running: false,
+            resume_at: None,
             listed_once: false,
             cwds: HashMap::new(),
             folders_checked: HashMap::new(),
@@ -799,7 +807,10 @@ impl AppWindow {
                     let changed = this.documents_updated(machines, vec![], window, cx);
                     match listed {
                         Some(v) => this.terminals_listed(v, window, cx),
-                        None => this.tend_terminals(false, window, cx),
+                        None => {
+                            this.tend_terminals(false, window, cx);
+                            this.tend_resume(false, window, cx);
+                        }
                     }
                     if changed { this.sync(window, cx); }
                     this.fit_hidden_tabs(window, cx);
@@ -1698,6 +1709,34 @@ impl AppWindow {
         cx.notify();
     }
 
+    /// Agents back in their conversations after a restart (resume.rs): labels
+    /// running Claude panes and types each due resume once, off the UI thread.
+    /// After a listing, or every few seconds while a Claude pane has no
+    /// recipe yet (its session file can land after the listing).
+    fn tend_resume(&mut self, listed: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.resume_running || self.draining { return; }
+        let records: Vec<Value> = self.live.values().filter(|r| crate::resume::step(r).is_some()).cloned().collect();
+        if records.is_empty() { return; }
+        let waiting = records.iter().any(|r| matches!(crate::resume::step(r), Some(crate::resume::Step::Read { .. })) && r.pointer(&format!("/labels/{}", crate::resume::LABEL)).is_none());
+        if !listed && !(waiting && self.resume_at.is_none_or(|t| t.elapsed() >= Duration::from_secs(2))) { return; }
+        self.resume_running = true;
+        self.resume_at = Some(Instant::now());
+        let (core, busy, restore) = (self.core.clone(), self.resume_busy.clone(), settings::get().restore_agents);
+        cx.spawn_in(window, async move |this, cx| {
+            let resumed = cx.background_executor().spawn(async move {
+                crate::resume::tend(core.as_ref(), &crate::resume::Files::here(), &records, restore, &busy)
+            }).await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.resume_running = false;
+                if !resumed.is_empty() && !this.draining {
+                    let n = resumed.len();
+                    let body = if n == 1 { "Claude Code is back in its conversation.".to_owned() } else { format!("{n} Claude Code panes are back in their conversations.") };
+                    this.layout_notice(if n == 1 { "Resumed an agent" } else { "Resumed agents" }, &body, window, cx);
+                }
+            });
+        }).detach();
+    }
+
     /// Shares what the person looks at as `herdr.seen` (wiki/Labels.md): an
     /// agent on screen in the active window, once per turn while it stays
     /// there, so a phone marking it unread isn't undone by a screen nobody
@@ -2299,6 +2338,7 @@ impl AppWindow {
             }
         }
         self.live = live;
+        self.tend_resume(true, window, cx);
         self.closing_terminals.retain(|addr, completed| !*completed || self.live.contains_key(addr));
         // A new sub-agent changes only this list; mods that show teams need to redraw.
         let terminals_changed = mods::publish_terminals(list);

@@ -398,6 +398,9 @@ pub struct Person {
     /// Allow terminal programs (including remote ones) to copy text locally.
     #[serde(skip_serializing_if = "is_true")]
     pub clipboard_write: bool,
+    /// Resume kept Claude Code panes in their own conversations after a restart (resume.rs).
+    #[serde(skip_serializing_if = "is_true")]
+    pub restore_agents: bool,
     /// Copy a mouse selection to the clipboard when the button is released.
     #[serde(skip_serializing_if = "is_true")]
     pub copy_on_select: bool,
@@ -470,6 +473,7 @@ impl Default for Person {
             ui_font: None,
             telemetry: true,
             clipboard_write: true,
+            restore_agents: true,
             copy_on_select: true,
             pane_scrollbars: true,
             minimum_contrast: 1.0,
@@ -517,6 +521,7 @@ pub struct Settings {
     /// 0..1: below 1, what's behind a terminal shows through.
     pub terminal_opacity: f32,
     pub clipboard_write: bool,
+    pub restore_agents: bool,
     pub copy_on_select: bool,
     pub minimum_contrast: f32,
     pub option_as_alt: OptionAsAlt,
@@ -564,6 +569,7 @@ impl Default for Settings {
             terminal_padding: [10.0, 6.0],
             terminal_opacity: 1.0,
             clipboard_write: true,
+            restore_agents: true,
             copy_on_select: true,
             minimum_contrast: 1.0,
             option_as_alt: OptionAsAlt::Auto,
@@ -608,6 +614,7 @@ impl Settings {
             terminal_opacity: look.terminal_opacity.unwrap_or(1.0).clamp(0.0, 1.0),
             sounds: person.sounds.clone(),
             clipboard_write: person.clipboard_write,
+            restore_agents: person.restore_agents,
             copy_on_select: person.copy_on_select,
             minimum_contrast: person.minimum_contrast,
             option_as_alt: person.option_as_alt,
@@ -1037,6 +1044,16 @@ mod tests {
     }
 
     #[test]
+    fn agents_are_restored_by_default_and_can_be_turned_off() {
+        assert!(Settings::default().restore_agents);
+        assert!(Settings::compose(&Person::default(), &crate::layout::Look::default(), true).restore_agents);
+        let off: Person = serde_json::from_str(r#"{"restore_agents":false}"#).unwrap();
+        assert!(!Settings::compose(&off, &crate::layout::Look::default(), true).restore_agents);
+        assert_eq!(serde_json::to_value(&off).unwrap()["restore_agents"], false);
+        assert!(serde_json::to_value(Person::default()).unwrap().get("restore_agents").is_none(), "the default isn't written");
+    }
+
+    #[test]
     fn program_clipboard_writes_default_on_and_can_be_disabled() {
         let default: Person = serde_json::from_str("{}").unwrap();
         assert!(default.clipboard_write);
@@ -1080,7 +1097,7 @@ mod tests {
     /// settings.json key.
     #[test]
     fn the_guide_explains_every_setting() {
-        let all = Person { core: Some(String::new()), font: Some(String::new()), font_size: Some(1.0), font_weight: Some(400), ui_font: Some(String::new()), telemetry: false, clipboard_write: false, copy_on_select: false, appearance: Appearance::Light, theme: Some(crate::layout::ThemeChoice::One(String::new())), colors: [("text".into(), String::new())].into(), ..Person::default() };
+        let all = Person { core: Some(String::new()), font: Some(String::new()), font_size: Some(1.0), font_weight: Some(400), ui_font: Some(String::new()), telemetry: false, clipboard_write: false, restore_agents: false, copy_on_select: false, appearance: Appearance::Light, theme: Some(crate::layout::ThemeChoice::One(String::new())), colors: [("text".into(), String::new())].into(), ..Person::default() };
         let keys: Vec<String> = serde_json::to_value(&all).unwrap().as_object().unwrap().keys().cloned().collect();
         let guide = include_str!("../defaults/AGENTS.md");
         let section = guide.split("## The person").nth(1).and_then(|s| s.split("\n## ").next()).unwrap_or_default();

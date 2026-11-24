@@ -135,6 +135,12 @@ the highlighted line shows where it will land.
   terminal (core crash, reboot, logout) gets a shell in its last folder,
   with the same address; its original command is never run again. Splits
   and mod panes stay. An exited or killed terminal is closed, not restarted.
+  Claude Code panes come back in their own conversation: while it runs, Apollo
+  reads Claude's `~/.claude/sessions/<pid>.json` and keeps the conversation in
+  the terminal's `apollo.resume` label; when that terminal's new shell is idle,
+  Apollo types `cd <folder> && claude <its flags> --resume <id>` once (zsh,
+  bash, sh, fish, PowerShell; not cmd). Quitting Claude drops the label.
+  `restore_agents: false` in settings.json turns this off.
   Focus, zoom, recent spaces, settled tabs and seen attention stay on this screen.
 - Every terminal is a core terminal. Apollo labels the ones it starts with
   `herdr.space=<id>` and `herdr.tab=<id>`. **A terminal with those
@@ -829,6 +835,9 @@ What's about the user, never a look:
   `p` writes Linux primary selection. `s` is ignored; cut buffers `0`–`7`
   are treated as the system clipboard.
   Clipboard reads (`?`) are never allowed.
+- `restore_agents`: after a reboot, core crash or logout, resume each kept
+  Claude Code pane in its own conversation with its flags (default `true`;
+  see Terminal panes above). Only Apollo's own panes, once per lost program.
 - `copy_on_select`: copy a mouse selection to the clipboard on release (default
   `true`). Set `false` to leave the clipboard untouched while keeping the selection
   visible; `terminal.copy` (Cmd+C/Ctrl+Shift+C) still copies it. On Linux, terminal

@@ -67,3 +67,17 @@ prefix. Bigger or app-wide state belongs in documents (`doc.get`,
 `doc.set`), and state for one device stays on that device.
 
 [Home](Home)
+
+## `apollo.resume`: how to bring an agent back (Apollo)
+
+Apollo writes this on its own kept Claude Code terminals while Claude runs:
+JSON `{"id", "cwd", "argv", "shell", "agent"}`: the conversation id and
+folder from Claude's `~/.claude/sessions/<pid>.json`, Claude's options
+(no first message, no `--resume`/`--continue`, no inline JSON settings),
+the terminal's shell pid and Claude's pid when it was read.
+
+When the terminal comes back with a different shell pid (its program was
+lost) and that shell is idle, Apollo types the resume line once and writes
+the new pid. The same pid back at a prompt means the person quit: Apollo
+removes the label. Other clients can ignore it; Apollo checks a label again
+before using it and never types one it wouldn't have written.
