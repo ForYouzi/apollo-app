@@ -5,6 +5,9 @@ and keeps them alive when the window closes. Use `herdr-app` only to change
 what the person sees. For starting, reading, messaging, waiting on or cleaning
 up agents and programs, read `hc --skill` and use hc.
 Your terminal address is `$HC_TERMINAL_ID`; it is not a pane ID.
+After a reboot or core crash, Apollo types `claude … --resume <id>` once into
+each of its kept Claude Code panes (label `apollo.resume`); don't start
+another copy of that conversation yourself.
 
 ## Inspect before acting
 

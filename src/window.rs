@@ -460,11 +460,13 @@ pub struct AppWindow {
     watched: Watched,
     /// Core's terminal records by address.
     live: HashMap<String, Value>,
-    /// Agent resume (resume.rs): a pass running, terminals and conversations
-    /// being resumed, and when the last pass started.
-    resume_busy: Arc<std::sync::Mutex<HashSet<String>>>,
+    /// Agent resume (resume.rs): what passes share, whether one is running,
+    /// and when the last quiet-poll pass started.
+    resume_state: Arc<std::sync::Mutex<crate::resume::State>>,
     resume_running: bool,
     resume_at: Option<Instant>,
+    /// `restore_agents`, readable by a pass off the UI thread (settings are per thread).
+    resume_on: Arc<std::sync::atomic::AtomicBool>,
     listed_once: bool,
     /// Live folders by address (from the shell process).
     cwds: HashMap<String, String>,
@@ -582,9 +584,10 @@ impl AppWindow {
             looked: HashMap::new(),
             watched: Watched::default(),
             live: HashMap::new(),
-            resume_busy: Arc::default(),
+            resume_state: Arc::default(),
             resume_running: false,
             resume_at: None,
+            resume_on: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             listed_once: false,
             cwds: HashMap::new(),
             folders_checked: HashMap::new(),
@@ -1714,17 +1717,22 @@ impl AppWindow {
     /// After a listing, or every few seconds while a Claude pane has no
     /// recipe yet (its session file can land after the listing).
     fn tend_resume(&mut self, listed: bool, window: &mut Window, cx: &mut Context<Self>) {
+        // Every poll, so a pass already sending sees it turned off.
+        self.resume_on.store(settings::get().restore_agents, std::sync::atomic::Ordering::Relaxed);
         if self.resume_running || self.draining { return; }
+        // A quiet poll: at most every 2 s, and only with something due.
+        if !listed && self.resume_at.is_some_and(|t| t.elapsed() < Duration::from_secs(2)) { return; }
         let records: Vec<Value> = self.live.values().filter(|r| crate::resume::step(r).is_some()).cloned().collect();
         if records.is_empty() { return; }
-        let waiting = records.iter().any(|r| matches!(crate::resume::step(r), Some(crate::resume::Step::Read { .. })) && r.pointer(&format!("/labels/{}", crate::resume::LABEL)).is_none());
-        if !listed && !(waiting && self.resume_at.is_none_or(|t| t.elapsed() >= Duration::from_secs(2))) { return; }
+        if !listed && self.resume_state.lock().map_or(true, |s| crate::resume::due(&records, &s).is_empty()) { return; }
         self.resume_running = true;
         self.resume_at = Some(Instant::now());
-        let (core, busy, restore) = (self.core.clone(), self.resume_busy.clone(), settings::get().restore_agents);
+        let (core, state, on) = (self.core.clone(), self.resume_state.clone(), self.resume_on.clone());
         cx.spawn_in(window, async move |this, cx| {
             let resumed = cx.background_executor().spawn(async move {
-                crate::resume::tend(core.as_ref(), &crate::resume::Files::here(), &records, restore, &busy)
+                // Read before each send, so turning it off stops what's queued.
+                let restore = || on.load(std::sync::atomic::Ordering::Relaxed);
+                crate::resume::tend(core.as_ref(), &crate::resume::Files::here(), &records, &restore, &state)
             }).await;
             let _ = this.update_in(cx, |this, window, cx| {
                 this.resume_running = false;
