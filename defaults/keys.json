@@ -57,7 +57,8 @@
     "ctrl-shift-x": "pane.close",
     "ctrl-shift-z": "pane.zoom",
     "ctrl-shift-l": "layout.switch",
-    "f2": "tab.rename",
+    "f2": "pane.rename",
+    "alt-f2": "tab.rename",
     "shift-f2": "space.rename"
   },
   "terminal": {
