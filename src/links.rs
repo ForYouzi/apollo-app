@@ -4,6 +4,7 @@
 use fancy_regex::Regex;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::num::NonZeroU32;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -202,7 +203,7 @@ fn dot_segment(url: &str) -> bool {
 /// What a URL opens: a `file:` URL names a file (`None` if it can't), others open as they are.
 fn url_target(url: &str) -> Option<Target> {
     if url.get(..5).is_some_and(|s| s.eq_ignore_ascii_case("file:")) {
-        return file_url_path(url).map(Target::File);
+        return file_url_file(url);
     }
     Some(Target::Url(url.to_owned()))
 }
@@ -225,10 +226,13 @@ fn existing(path: &str, ctx: &Ctx) -> Option<PathBuf> {
     };
     let full = if p.is_absolute() { p } else { ctx.cwd.as_ref()?.join(p) };
     // Windows ignores a trailing period when checking whether a path exists.
-    if cfg!(windows) && full.extension().is_some_and(|ext| ext.is_empty()) {
-        return None;
+    if !(cfg!(windows) && full.extension().is_some_and(|ext| ext.is_empty())) && full.exists() {
+        return Some(full);
     }
-    full.exists().then_some(full)
+    // `path#L42` or `#L5-L12`: an anchor naming lines in the file.
+    let (head, lines) = path.rsplit_once("#L")?;
+    line_range(lines)?;
+    existing(head, ctx)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -402,7 +406,7 @@ fn percent_decode(s: &str) -> Option<Vec<u8>> {
 /// relative ones need the terminal's folder. A `file:` URL always names a file.
 pub fn resolve(link: &str, cwd: Option<&Path>) -> Option<Target> {
     if link.get(..5).is_some_and(|s| s.eq_ignore_ascii_case("file:")) {
-        return file_url_path(link).map(Target::File);
+        return file_url_file(link);
     }
     let scheme = link.split_once(':').is_some_and(|(s, _)| {
         s.len() > 1 && s.starts_with(|c: char| c.is_ascii_alphabetic()) && s.chars().all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
@@ -429,15 +433,26 @@ pub fn resolve(link: &str, cwd: Option<&Path>) -> Option<Target> {
     if !(cfg!(windows) && full.extension().is_some_and(|ext| ext.is_empty())) && full.exists() {
         return Some(Target::File(full));
     }
-    // The period ending a sentence, or `:42` / `:42:7` naming a place in the file.
-    let mut bare = full.to_str()?.strip_suffix('.').unwrap_or(full.to_str()?);
-    for _ in 0..2 {
-        match bare.rsplit_once(':') {
-            Some((head, n)) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => bare = head,
-            _ => break,
+    let bare = without_suffix(full.to_str()?);
+    Path::new(bare).exists().then(|| Target::File(PathBuf::from(bare)))
+}
+
+/// The file a `file:` URL names (`None` if it can't name one). When that file
+/// doesn't exist, a `:42`, `:42:7` or `:5-12` written after its path is a place
+/// in the file; escaped (`%3A`), it stays part of the name.
+fn file_url_file(url: &str) -> Option<Target> {
+    let exact = file_url_path(url)?;
+    // Never probe a network path (UNC): that can block and authenticate.
+    if !network_path(&exact) && !exact.exists() {
+        let head = url.split(['?', '#']).next().unwrap_or(url);
+        let bare = without_place(head);
+        if bare.len() < head.len()
+            && let Some(file) = file_url_path(bare).filter(|p| p.exists())
+        {
+            return Some(Target::File(file));
         }
     }
-    Path::new(bare).exists().then(|| Target::File(PathBuf::from(bare)))
+    Some(Target::File(exact))
 }
 
 
@@ -448,9 +463,20 @@ fn has_scheme(link: &str) -> bool {
 }
 
 // The period ending a sentence, or `:42` / `:42:7` naming a place in the file.
-// Also a range, `:12-20` or `:12–20`, as Apollo's scanner reads one.
+// Also a range, `:12-20` or `:12–20`, as Apollo's scanner reads one, and an
+// anchor, `#L42` or `#L5-L12`.
 fn without_suffix(path: &str) -> &str {
-    let mut bare = path.strip_suffix('.').unwrap_or(path);
+    let bare = path.strip_suffix('.').unwrap_or(path);
+    if let Some((head, lines)) = bare.rsplit_once("#L")
+        && line_range(lines).is_some()
+    {
+        return head;
+    }
+    without_place(bare)
+}
+
+/// `path` without a `:42`, `:42:7`, `:12-20` or `:12–20` at its end.
+fn without_place(mut bare: &str) -> &str {
     let number = |n: &str| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit());
     for _ in 0..2 {
         match bare.rsplit_once(':') {
@@ -459,6 +485,36 @@ fn without_suffix(path: &str) -> &str {
         }
     }
     bare
+}
+
+/// `5`, `5-12`, `5–12` or `5-L12`: the first line of a range.
+fn line_range(text: &str) -> Option<u32> {
+    let (start, end) = text.split_once(['-', '\u{2013}']).unwrap_or((text, "1"));
+    let end = end.strip_prefix('L').unwrap_or(end);
+    is_number(end).then_some(())?;
+    start.parse::<NonZeroU32>().ok().map(NonZeroU32::get)
+}
+
+/// The `:line[:column]`, `:start-end` or `#Lstart[-end]` that `raw` adds after
+/// the path spelling `bare`. A range gives its first line.
+fn place(raw: &str, bare: &str) -> Option<(u32, Option<u32>)> {
+    let rest = raw.strip_prefix(bare)?;
+    let rest = rest.strip_suffix('.').unwrap_or(rest);
+    if let Some(lines) = rest.strip_prefix("#L") {
+        return line_range(lines).map(|line| (line, None));
+    }
+    let rest = rest.strip_prefix(':')?;
+    if rest.contains(['-', '\u{2013}']) {
+        return line_range(rest).map(|line| (line, None));
+    }
+    let (line, column) = rest.split_once(':').unwrap_or((rest, ""));
+    let line = line.parse::<NonZeroU32>().ok()?.get();
+    let column = column.parse::<NonZeroU32>().ok().map(NonZeroU32::get);
+    Some((line, column))
+}
+
+fn is_number(text: &str) -> bool {
+    !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit())
 }
 
 /// A link's text and what Apollo opens for it (`native`), as mod link handlers see it.
@@ -495,15 +551,14 @@ fn handler_file_uri(link: &str) -> Option<(&str, &str)> {
 }
 
 fn decode_file_url_path(path: &str) -> Option<String> {
-    let rest = path.split(['?', '#']).next()?;
-    let mut bytes = Vec::with_capacity(rest.len());
+    let mut bytes = Vec::with_capacity(path.len());
     let mut i = 0;
-    while i < rest.len() {
-        if rest.as_bytes()[i] == b'%' {
-            bytes.push(u8::from_str_radix(rest.get(i + 1..i + 3)?, 16).ok()?);
+    while i < path.len() {
+        if path.as_bytes()[i] == b'%' {
+            bytes.push(u8::from_str_radix(path.get(i + 1..i + 3)?, 16).ok()?);
             i += 3;
         } else {
-            bytes.push(rest.as_bytes()[i]);
+            bytes.push(path.as_bytes()[i]);
             i += 1;
         }
     }
@@ -634,7 +689,16 @@ impl Resolved<'_> {
                             _ => None,
                         }
                     };
-                    json!({"kind": "file", "raw": raw, "path": path.and_then(Path::to_str)})
+                    let mut link = json!({"kind": "file", "raw": raw, "path": path.and_then(Path::to_str)});
+                    if uri.is_none()
+                        && let Some((line, column)) = file_spelling.and_then(|bare| place(raw, bare))
+                    {
+                        link["line"] = line.into();
+                        if let Some(column) = column {
+                            link["column"] = column.into();
+                        }
+                    }
+                    link
                 }),
             };
             handlers.push((id.clone(), link.clone()));
@@ -782,6 +846,11 @@ mod tests {
             (full_url, None, true, Some((Url, full_url)), u(full_url), u(full_url)),
             ("tel:12345", Some("12345"), false, Some((Url, "tel:12345")), u("tel:12345"), u("tel:12345")),
             ("src/main.rs:12:5: error", Some("main.rs"), false, Some((File, "src/main.rs:12:5")), f("src/main.rs"), f("src/main.rs")),
+            // A zero line or column is no place: SonicTerm leaves it unlinked in text; a
+            // marked (OSC 8) link still opens the file, with no line or the line only.
+            ("src/main.rs:0:5", Some("main.rs"), false, None, None, None),
+            ("src/main.rs:0:5", None, false, Some((File, "src/main.rs:0:5")), f("src/main.rs"), f("src/main.rs")),
+            ("src/main.rs:12:0", None, false, Some((File, "src/main.rs:12:0")), f("src/main.rs"), f("src/main.rs")),
             ("./src/main.rs:7", Some("main.rs"), false, Some((File, "./src/main.rs:7")), f(literal), f(literal)),
             // SonicTerm's scanner, which Apollo uses, links no bare `..` part.
             ("src/..", Some(".."), false, None, None, None),
@@ -828,7 +897,21 @@ mod tests {
                     Url => json!({"kind":"url", "raw":expected_raw, "url":expected_raw}),
                     File => {
                         let path = match &expected_pass { Some(Target::File(path)) => Some(path.as_path()), _ => None };
-                        json!({"kind":"file", "raw":expected_raw, "path":path.map(Path::to_string_lossy)})
+                        let mut link = json!({"kind":"file", "raw":expected_raw, "path":path.map(Path::to_string_lossy)});
+                        let place = match expected_raw {
+                            "src/main.rs:12:5" => Some((12, Some(5))),
+                            "src/main.rs:12:0" => Some((12, None)),
+                            "./gone.rs:42:7" => Some((42, Some(7))),
+                            "./src/main.rs:7" if !cfg!(unix) => Some((7, None)),
+                            _ => None,
+                        };
+                        if let Some((line, column)) = place {
+                            link["line"] = json!(line);
+                            if let Some(column) = column {
+                                link["column"] = json!(column);
+                            }
+                        }
+                        link
                     }
                 }
             });
@@ -877,6 +960,74 @@ mod tests {
             let literal = vec![("editor".into(), rules(json!([{"kind":"file", "pattern":r"^src/main\.rs:7$"}])))];
             let native = resolve("src/main.rs:7", Some(&dir));
             assert_eq!(resolved("src/main.rs:7", native).click(false, &literal).unwrap().handlers.len(), 1);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn places_come_from_the_suffix_after_the_path() {
+        assert_eq!(place("src/a.rs:12:5", "src/a.rs"), Some((12, Some(5))));
+        assert_eq!(place("src/a.rs:12", "src/a.rs"), Some((12, None)));
+        assert_eq!(place("src/a.rs:12.", "src/a.rs"), Some((12, None)));
+        assert_eq!(place("src/a.rs", "src/a.rs"), None);
+        assert_eq!(place("src/a.rs:7", "src/a.rs:7"), None);
+        assert_eq!(place("src/a.rs:x", "src/a.rs"), None);
+        assert_eq!(place("src/a.rs:4294967296:5", "src/a.rs"), None);
+        assert_eq!(place("src/a.rs:12:4294967296", "src/a.rs"), Some((12, None)));
+        assert_eq!(place("file:///a.rs", "/a.rs"), None);
+        assert_eq!(place("C:/src/a.rs:12:5", "C:/src/a.rs"), Some((12, Some(5))));
+        assert_eq!(place(r"C:\src\a.rs:12:5", r"C:\src\a.rs"), Some((12, Some(5))));
+        assert_eq!(place("C:/src/a.rs", "C:/src/a.rs"), None);
+        assert_eq!(place("src/a.rs:5-12", "src/a.rs"), Some((5, None)));
+        assert_eq!(place("src/a.rs#L42", "src/a.rs"), Some((42, None)));
+        assert_eq!(place("src/a.rs#L5-L12", "src/a.rs"), Some((5, None)));
+        assert_eq!(place("src/a.rs#L5-12.", "src/a.rs"), Some((5, None)));
+        assert_eq!(place("src/a.rs:5-x", "src/a.rs"), None);
+        assert_eq!(place("src/a.rs#Lx", "src/a.rs"), None);
+        // Apollo's scanner also reads an en dash range (`12–20`).
+        assert_eq!(place("src/a.rs:5\u{2013}12", "src/a.rs"), Some((5, None)));
+        assert_eq!(place("src/a.rs#L5\u{2013}12", "src/a.rs"), Some((5, None)));
+    }
+
+    #[test]
+    fn line_ranges_and_anchors_after_a_path_are_not_part_of_it() {
+        let dir = std::env::temp_dir().join(format!("apollo-link-ranges-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/main.rs"), "").unwrap();
+        let file = Some(Target::File(dir.join("src/main.rs")));
+        let ctx = Ctx::new(Some(dir.clone()));
+        let editor = vec![("editor".into(), rules(json!([{"kind":"file", "pattern":r"^src/main\.rs$"}])))];
+        for (link, line) in [("src/main.rs:5-12", 5), ("src/main.rs#L42", 42), ("src/main.rs#L5-L12", 5), ("src/main.rs#L5-12", 5), ("src/main.rs#L5-12.", 5)] {
+            // Upstream checks Ghostty's pattern here; Apollo picks with SonicTerm's scanner.
+            let text = format!("see {link} now");
+            let (range, picked) = pick(&text, 4, false, &ctx, |_| None).unwrap_or_else(|| panic!("no link in {text}"));
+            assert_eq!(&text[range.clone()], link.trim_end_matches('.'), "{link}");
+            assert_eq!(Some(picked.clone()), file.clone().map(Picked::Link), "{link}");
+            // A file rule sees the path; the handler gets the first line.
+            let Picked::Link(native) = picked else { unreachable!() };
+            let hit = resolved(&text[range], Some(native)).click(false, &editor).unwrap();
+            assert_eq!(hit.handlers.first().map(|(_, l)| l["line"].clone()), Some(json!(line)), "{link}");
+            // A marked (OSC 8) link opens the same file.
+            assert_eq!(native_target(link, Some(&dir)), file, "{link}");
+        }
+        for link in ["src/main.rs:5-x", "src/main.rs#Lx", "src/main.rs#5"] {
+            assert_eq!(native_target(link, Some(&dir)), None, "{link}");
+        }
+        let slashed = dir.join("src/main.rs").to_string_lossy().replace('\\', "/");
+        let root = if cfg!(windows) { "/" } else { "" };
+        let anchored_uri = format!("file://{root}{slashed}#L5-L12");
+        assert_eq!(native_target(&anchored_uri, None), file);
+        for suffix in [":5-12", ":42"] {
+            let uri = format!("file://{root}{slashed}{suffix}");
+            assert_eq!(native_target(&uri, None), file, "{suffix}");
+            // The same URL in terminal text.
+            let text = format!("open {uri} now");
+            assert_eq!(pick(&text, 5, false, &ctx, |_| None).map(|(_, p)| p), file.clone().map(Picked::Link), "{suffix}");
+        }
+        // Escaped, the suffix is part of the name: that file, never main.rs.
+        for escaped in ["%23L5", "%3A5-12", ":5%2D12"] {
+            let uri = format!("file://{root}{slashed}{escaped}");
+            assert_eq!(native_target(&uri, None), file_url_path(&uri).map(Target::File), "{escaped}");
         }
         std::fs::remove_dir_all(dir).unwrap();
     }
