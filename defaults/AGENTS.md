@@ -565,6 +565,10 @@ shortcuts must then be added by hand.
   binds to each (string actions only). Rebinding updates the menus live.
 - Terminal keys honor the program's negotiated Kitty mode, including on Windows.
 - Windows terminal Escape stays separate from the following key.
+- Renaming: `f2` names the focused pane (`pane.rename`), `alt-f2` the tab
+  (`tab.rename`), `shift-f2` the space (`space.rename`). A pane's right-click
+  menu has Rename too, and double-clicking a tab renames it. Where the desktop
+  takes Alt+F2 (GNOME's run dialog), use the palette's Rename tab or rebind it.
 - Search: `ctrl-shift-f` (Cmd-F on macOS) opens a find bar inside the focused terminal;
   Enter/Shift-Enter moves through matches and Escape closes it while the find field
   has focus. Clicking the terminal puts typing, including Escape, back in the program;

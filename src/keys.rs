@@ -32,19 +32,21 @@ pub const DEFAULTS: &str = include_str!("../defaults/keys.json");
 #[cfg(target_os = "macos")]
 pub const DEFAULTS: &str = include_str!("../defaults/keys.macos.json");
 
-// Exact originals from release tags, deduplicated across v0.1.4–v0.1.15.
+// Exact originals from release tags, deduplicated across v0.1.4–v0.1.16 (Apollo v0.0.4–v0.0.9).
 // Keep these when defaults change: only untouched shipped files may migrate.
 #[cfg(any(not(target_os = "macos"), test))]
 const SHIPPED_KEYS: &[&str] = &[
     include_str!("keys/shipped/v0.1.4-keys.json"),
     include_str!("keys/shipped/v0.1.5-keys.json"),
     include_str!("keys/shipped/v0.1.12-keys.json"),
+    include_str!("keys/shipped/v0.1.16-keys.json"),
 ];
 #[cfg(any(target_os = "macos", test))]
 const SHIPPED_MACOS_KEYS: &[&str] = &[
     include_str!("keys/shipped/v0.1.4-keys.macos.json"),
     include_str!("keys/shipped/v0.1.5-keys.macos.json"),
     include_str!("keys/shipped/v0.1.15-keys.macos.json"),
+    include_str!("keys/shipped/v0.1.16-keys.macos.json"),
 ];
 
 #[derive(serde::Deserialize)]
@@ -432,6 +434,17 @@ mod tests {
     fn shipped_keys_load() {
         for keys in [include_str!("../defaults/keys.json"), include_str!("../defaults/keys.macos.json")] {
             assert_eq!(super::parse(keys).err(), None);
+        }
+    }
+
+    /// F2 renames what you look at most (the pane); the tab moves to Alt+F2.
+    #[test]
+    fn f2_renames_the_pane_alt_f2_the_tab_shift_f2_the_space() {
+        for keys in [include_str!("../defaults/keys.json"), include_str!("../defaults/keys.macos.json")] {
+            let global: serde_json::Value = serde_json::from_str::<serde_json::Value>(keys).unwrap()["global"].clone();
+            assert_eq!(global["f2"], "pane.rename");
+            assert_eq!(global["alt-f2"], "tab.rename");
+            assert_eq!(global["shift-f2"], "space.rename");
         }
     }
 }
