@@ -246,21 +246,50 @@ pub fn runs_agent(argv: &[String]) -> bool {
 
 fn runs_agent_in(t: &Table, argv: &[String]) -> bool {
     let Some(first) = argv.first().map(|a| base(a).to_ascii_lowercase()) else { return false };
-    let script = || {
-        let arg = argv.iter().skip(1).find(|a| !a.starts_with('-'))?;
+    let launcher = |name: &str| t.interpreters.iter().chain(&t.shells).any(|i| i.eq_ignore_ascii_case(name));
+    // What runs: the program, or the script an interpreter or shell runs.
+    let name = if launcher(&first) {
+        match script(argv) {
+            Some(n) => n,
+            None => return false,
+        }
+    } else {
+        first
+    };
+    t.programs.iter().filter(|(_, e)| !e.run.is_empty()).any(|(key, e)| {
+        // An entry run by a launcher (`["bash", "/opt/my-agent"]`) is its script.
+        let runs = match e.run.first().map(|r| base(r).to_ascii_lowercase()) {
+            Some(r) if launcher(&r) => script(&e.run),
+            r => r,
+        };
+        key.eq_ignore_ascii_case(&name) || e.also.iter().any(|a| a.eq_ignore_ascii_case(&name)) || runs.is_some_and(|r| r == name)
+    })
+}
+
+/// The script an interpreter or shell runs, by name (`node --require x.js
+/// .../copilot` is `copilot`): the first operand that isn't an option or an
+/// option's value. None for evaluated code (`-e`, `-c`, `-m`) or no script.
+fn script(argv: &[String]) -> Option<String> {
+    const VALUE: &[&str] = &["-r", "--require", "--import", "--loader", "--experimental-loader", "-C", "--conditions", "--env-file", "--title", "-W", "-X"];
+    const CODE: &[&str] = &["-e", "--eval", "-p", "--print", "-c", "-m", "-lc", "-ic", "-lic"];
+    let mut i = 1;
+    while let Some(arg) = argv.get(i) {
+        if CODE.contains(&arg.as_str()) {
+            return None;
+        }
+        if arg.starts_with('-') {
+            i += if VALUE.contains(&arg.as_str()) { 2 } else { 1 };
+            continue;
+        }
         let name = base(arg).to_ascii_lowercase();
         // npm's Claude Code is `node .../@anthropic-ai/claude-code/cli.js`.
         if name == "cli.js" && arg.replace('\\', "/").contains("@anthropic-ai/claude-code/") {
             return Some("claude".to_owned());
         }
-        Some([".js", ".mjs", ".cjs"].iter().find_map(|x| name.strip_suffix(x)).unwrap_or(&name).to_owned())
-    };
-    let name = if t.interpreters.iter().any(|i| *i == first) { match script() { Some(n) => n, None => return false } } else { first };
-    t.programs.iter().filter(|(_, e)| !e.run.is_empty()).any(|(key, e)| {
-        key.eq_ignore_ascii_case(&name)
-            || e.also.iter().any(|a| a.eq_ignore_ascii_case(&name))
-            || e.run.first().is_some_and(|r| base(r).eq_ignore_ascii_case(&name))
-    })
+        let stem = [".js", ".mjs", ".cjs", ".ts", ".py", ".rb"].iter().find_map(|x| name.strip_suffix(x)).unwrap_or(&name);
+        return Some(stem.to_owned());
+    }
+    None
 }
 
 fn base(s: &str) -> &str {
@@ -440,10 +469,20 @@ mod tests {
         assert!(!runs(&["nvim", "x.rs"]));
         assert!(!runs(&["zsh"]));
         assert!(!runs(&[]));
+        // The script, not an option's value; other script kinds too.
+        assert!(!runs(&["node", "--require", "./claude.js", "server.js"]));
+        assert!(runs(&["node", "--require", "./setup.js", "/opt/homebrew/bin/copilot"]));
+        assert!(runs(&["node", "--inspect", "/x/claude"]));
+        assert!(!runs(&["node", "-e", "require('claude')"]), "evaluated code has no script");
+        assert!(runs(&["python3", "/opt/tools/claude.py"]));
         // A person's own agent: its `run` program counts.
         let mut mine = t;
         mine.programs.insert("claude-alt".into(), Entry { run: vec!["my-claude-alt".into()], ..Entry::default() });
         assert!(runs_agent_in(&mine, &["/usr/local/bin/my-claude-alt".to_string()]));
+        // Run by an interpreter or shell: its script counts, never every `bash`.
+        mine.programs.insert("mine".into(), Entry { run: vec!["bash".into(), "/opt/my-agent".into()], ..Entry::default() });
+        assert!(!runs_agent_in(&mine, &["bash".to_string()]));
+        assert!(runs_agent_in(&mine, &["bash".to_string(), "/opt/my-agent".to_string()]));
     }
 
     #[test]

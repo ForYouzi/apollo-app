@@ -193,7 +193,7 @@ export interface AgentInfo {
 }
 
 /** Agents, in space, tab, pane order: terminals whose program reports a status,
- *  and top-level terminals running a known agent (programs.json entries with `run`)
+ *  and terminals running a known agent (programs.json entries with `run`)
  *  that hasn't reported, as `idle` (the core resets a status whenever the terminal's
  *  own shell is in front, even for a moment). Live. */
 export function agents(): AgentInfo[];

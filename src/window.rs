@@ -3563,19 +3563,11 @@ impl AppWindow {
             }
             "agent.next" | "agent.prev" => {
                 let order = self.agent_order();
-                if order.is_empty() {
-                    return;
+                let shown = self.shown_agent();
+                let root = |a: &str| self.root_agent(a);
+                if let Some(addr) = step_agent(&order, shown.as_deref(), &root, name == "agent.next") {
+                    self.focus_agent(&addr);
                 }
-                let current = self.shown_agent().map(|a| self.root_agent(&a));
-                let n = order.len();
-                let next = match current.and_then(|c| order.iter().position(|a| *a == c)) {
-                    Some(i) if name == "agent.next" => (i + 1) % n,
-                    Some(i) => (i + n - 1) % n,
-                    None if name == "agent.next" => 0,
-                    None => n - 1,
-                };
-                let addr = order[next].clone();
-                self.focus_agent(&addr);
             }
             // ---- layout
             "layout.switch" => {
@@ -5492,13 +5484,29 @@ fn adoptable(record: &Value, space: &str, tab: Option<&str>, machine: Option<&st
         && labeled_tab == tab.map(|t| crate::mirror::local(t, machine))
 }
 
-/// A known agent runs in a top-level terminal: its foreground process (never
-/// its launch argv, which still names an agent after it exits) is one. Sub-agents
-/// are listed only when they report, as before.
+/// A known agent runs in a terminal: its foreground process (never its launch
+/// argv, which still names an agent after it exits) is one. The lists only hold
+/// terminals in panes, so parked helpers never show.
 fn runs_agent(record: &Value) -> bool {
-    let top = record.get("parent").and_then(Value::as_str).is_none_or(str::is_empty);
     let argv: Vec<String> = record.pointer("/foreground/argv").and_then(Value::as_array).into_iter().flatten().filter_map(|a| a.as_str().map(str::to_owned)).collect();
-    top && crate::programs::runs_agent(&argv)
+    crate::programs::runs_agent(&argv)
+}
+
+/// The agent after (or before) the one shown: from its own place when it's in
+/// the order (a kept sub-agent has one), else from its parent's.
+fn step_agent(order: &[String], shown: Option<&str>, root: &dyn Fn(&str) -> String, forward: bool) -> Option<String> {
+    let n = order.len();
+    if n == 0 {
+        return None;
+    }
+    let at = shown.and_then(|s| order.iter().position(|a| a == s).or_else(|| order.iter().position(|a| *a == root(s))));
+    let i = match at {
+        Some(i) if forward => (i + 1) % n,
+        Some(i) => (i + n - 1) % n,
+        None if forward => 0,
+        None => n - 1,
+    };
+    Some(order[i].clone())
 }
 
 fn program_of(report: &Value, argv: Option<&Value>) -> Value {
@@ -5756,18 +5764,39 @@ fn reconcile_core_update_error(dismissed: &mut Option<String>, core: &crate::upd
 #[cfg(test)]
 mod tests {
 
-    /// What counts as a running agent for the lists: the program in front of
-    /// a top-level terminal. A sub-agent (it has a parent) is listed only when
-    /// it reports, as before, so `agent.next` keeps cycling.
+    /// What counts as a running agent for the lists: the program in front of a
+    /// terminal (the lists only ever hold terminals in panes).
     #[test]
-    fn a_running_agent_is_the_foreground_of_a_top_level_terminal() {
+    fn a_running_agent_is_the_program_in_front() {
         let rec = |fg: serde_json::Value, argv: &[&str], parent: Option<&str>| serde_json::json!({"argv": argv, "foreground": fg, "parent": parent});
         let claude = serde_json::json!({"pid": 5, "name": "claude", "argv": ["claude"], "cwd": "/w"});
         let pwsh = serde_json::json!({"pid": 4, "name": "pwsh.exe", "argv": ["pwsh.exe", "-NoExit", "-Command", "& 'claude'"], "cwd": "/w"});
         assert!(super::runs_agent(&rec(claude.clone(), &["zsh"], None)));
-        assert!(!super::runs_agent(&rec(claude, &["zsh"], Some("t1"))), "sub-agent");
+        assert!(super::runs_agent(&rec(claude, &["zsh"], Some("t1"))), "a kept sub-agent in a pane counts too");
         assert!(!super::runs_agent(&rec(pwsh, &["pwsh.exe", "-NoExit", "-Command", "& 'claude'"], None)), "Claude exited; PowerShell in front");
         assert!(!super::runs_agent(&rec(serde_json::Value::Null, &["claude"], None)), "no foreground: not the root argv");
+    }
+
+    /// agent.next/prev step from the agent shown when it's in the order (a
+    /// kept sub-agent), else from its parent's place; a full cycle visits all.
+    #[test]
+    fn agent_navigation_cycles_through_parents_and_kept_children() {
+        let order: Vec<String> = ["p", "c", "q"].map(String::from).to_vec();
+        let root = |a: &str| if a == "c" { "p".to_owned() } else { a.to_owned() };
+        let mut at = None;
+        let mut seen = Vec::new();
+        for _ in 0..3 {
+            let next = super::step_agent(&order, at.as_deref(), &root, true).unwrap();
+            seen.push(next.clone());
+            at = Some(next);
+        }
+        assert_eq!(seen, ["p", "c", "q"]);
+        assert_eq!(super::step_agent(&order, Some("q"), &root, true).as_deref(), Some("p"), "wraps");
+        assert_eq!(super::step_agent(&order, Some("c"), &root, false).as_deref(), Some("p"), "back from the child");
+        // A child that isn't in the order (no pane) steps from its parent's place.
+        let short: Vec<String> = ["p", "q"].map(String::from).to_vec();
+        assert_eq!(super::step_agent(&short, Some("c"), &root, true).as_deref(), Some("q"));
+        assert_eq!(super::step_agent(&[], None, &root, true), None);
     }
 
     /// The corner pill: a newer Apollo is a download, never "ready to restart";
