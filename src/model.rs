@@ -67,6 +67,10 @@ pub struct Agent {
     pub word: Option<String>,
     /// The agent's name from its 7501 report (`app`), e.g. "claude-code".
     pub app: Option<String>,
+    /// A known agent is the program in front (`programs::runs_agent`): without
+    /// a word it's idle, not gone (the core resets a word whenever the
+    /// terminal's own shell is in front, even for a moment).
+    pub running: bool,
     /// Whether the person has seen it since it last stopped working.
     pub seen: bool,
     /// Core's turn counter: goes up each time it stops working.
@@ -527,6 +531,21 @@ impl Model {
         self.tabs().flat_map(|c| addresses(&c.root)).collect()
     }
 
+    /// Whether a known agent is the program in front (no entry for plain shells).
+    pub fn set_running(&mut self, address: &str, running: bool) -> bool {
+        match self.agents.get_mut(address) {
+            Some(a) if a.running != running => {
+                a.running = running;
+                true
+            }
+            None if running => {
+                self.agents.insert(address.to_owned(), Agent { seen: true, running, ..Default::default() });
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Applies a status word from core (Herdr's seen rules).
     pub fn set_word(&mut self, address: &str, word: Option<String>, app: Option<String>, looking: bool) -> bool {
         let a = self.agents.entry(address.to_owned()).or_insert_with(|| Agent { seen: true, ..Default::default() });
@@ -597,7 +616,8 @@ impl Model {
     /// What the UI shows: working, blocked, done (finished, unseen), idle, or None (not an agent).
     pub fn status(&self, address: &str) -> Option<&'static str> {
         let a = self.agents.get(address)?;
-        Some(match a.word.as_deref()? {
+        let Some(word) = a.word.as_deref() else { return a.running.then_some("idle") };
+        Some(match word {
             "working" => "working",
             "blocked" | "error" => "blocked",
             _ if a.seen_turn.map_or(!a.seen, |s| a.turn > s) => "done",
@@ -706,6 +726,27 @@ pub fn space_json(m: &Model, p: &Space, index: usize, branch: Option<&str>, home
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A running agent the core's status reset left without a word is idle,
+    /// everywhere status is read (lists, tab and space rollups); a report wins.
+    #[test]
+    fn a_running_agent_without_a_word_is_idle() {
+        let mut m = Model::default();
+        assert_eq!(m.status("t1"), None);
+        assert!(m.set_running("t1", true));
+        assert!(!m.set_running("t1", true), "unchanged");
+        assert_eq!(m.status("t1"), Some("idle"));
+        assert_eq!(m.rollup(&["t1".to_string()]), Some("idle"));
+        m.set_word("t1", Some("working".into()), None, false);
+        assert_eq!(m.status("t1"), Some("working"));
+        m.set_word("t1", None, None, false);
+        assert_eq!(m.status("t1"), Some("idle"), "reset while it runs");
+        assert!(m.set_running("t1", false));
+        assert_eq!(m.status("t1"), None, "gone when it stops");
+        // A plain shell never gets an entry.
+        assert!(!m.set_running("t2", false));
+        assert!(!m.agents.contains_key("t2"));
+    }
 
     #[test]
     fn folders_name_as_in_herdr_on_every_system() {

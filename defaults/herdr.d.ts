@@ -199,7 +199,10 @@ export interface AgentInfo {
   focused: boolean;
 }
 
-/** Terminals whose program reports a status (agents), in space, tab, pane order. Live. */
+/** Agents, in space, tab, pane order: terminals whose program reports a status,
+ *  and terminals running a known agent (programs.json entries with `run`)
+ *  that hasn't reported, as `idle` (the core resets a status whenever the terminal's
+ *  own shell is in front, even for a moment). Live. */
 export function agents(): AgentInfo[];
 
 /** History scroll as Ghostty reports it, read fresh by panes().
@@ -228,7 +231,8 @@ export interface PaneInfo {
   /** Its live folder, and the git branch there. */
   cwd: string | null;
   branch: string | null;
-  /** Agent status if the program reports one, else null. */
+  /** Agent status if the program reports one; `idle` while a known agent runs
+   *  in it without one (see `agents()`); else null. */
   status: Status | null;
   app: string | null;
   program: Program;
