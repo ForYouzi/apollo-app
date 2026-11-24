@@ -236,6 +236,33 @@ pub fn agent_name(app: Option<&str>) -> String {
     }
 }
 
+/// Whether the program in front (`argv` of the foreground process) is an
+/// agent people start: an entry with `run` (by its key, `match` names, or
+/// its `run` program), or the script an interpreter runs (`node .../copilot`).
+/// Only the program counts: never an argument (`--directory /tmp/claude`).
+pub fn runs_agent(argv: &[String]) -> bool {
+    TABLE.with(|t| runs_agent_in(&t.borrow(), argv))
+}
+
+fn runs_agent_in(t: &Table, argv: &[String]) -> bool {
+    let Some(first) = argv.first().map(|a| base(a).to_ascii_lowercase()) else { return false };
+    let script = || {
+        let arg = argv.iter().skip(1).find(|a| !a.starts_with('-'))?;
+        let name = base(arg).to_ascii_lowercase();
+        // npm's Claude Code is `node .../@anthropic-ai/claude-code/cli.js`.
+        if name == "cli.js" && arg.replace('\\', "/").contains("@anthropic-ai/claude-code/") {
+            return Some("claude".to_owned());
+        }
+        Some([".js", ".mjs", ".cjs"].iter().find_map(|x| name.strip_suffix(x)).unwrap_or(&name).to_owned())
+    };
+    let name = if t.interpreters.iter().any(|i| *i == first) { match script() { Some(n) => n, None => return false } } else { first };
+    t.programs.iter().filter(|(_, e)| !e.run.is_empty()).any(|(key, e)| {
+        key.eq_ignore_ascii_case(&name)
+            || e.also.iter().any(|a| a.eq_ignore_ascii_case(&name))
+            || e.run.first().is_some_and(|r| base(r).eq_ignore_ascii_case(&name))
+    })
+}
+
 fn base(s: &str) -> &str {
     let s = s.rsplit(['/', '\\']).next().unwrap_or(s);
     let s = s.trim_start_matches('-');
@@ -389,6 +416,34 @@ mod tests {
     fn key(app: Option<&str>, argv: &[&str]) -> String {
         let argv: Vec<String> = argv.iter().map(|s| s.to_string()).collect();
         resolve(&t(), app, &argv)["key"].as_str().unwrap().to_owned()
+    }
+
+    /// The agents list keeps a running agent whose status the core reset: only
+    /// the program in front counts, never an argument or a wrapper's text.
+    #[test]
+    fn only_the_program_in_front_runs_an_agent() {
+        let t = t();
+        let runs = |argv: &[&str]| runs_agent_in(&t, &argv.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        assert!(runs(&["claude", "--resume", "x"]));
+        assert!(runs(&["/opt/homebrew/bin/claude"]));
+        assert!(runs(&[r"C:\Users\me\.local\bin\Claude.Exe"]));
+        assert!(runs(&["codex"]));
+        assert!(runs(&["node", "/opt/homebrew/bin/copilot", "--yolo"]));
+        assert!(runs(&["node", r"C:\npm\node_modules\@anthropic-ai\claude-code\cli.js"]));
+        assert!(runs(&["agent"]), "Cursor's CLI");
+        // Arguments and wrappers are not the program.
+        assert!(!runs(&["python3", "-m", "http.server", "--directory", "/tmp/claude"]));
+        assert!(!runs(&["python3", "serve.py", "claude"]));
+        assert!(!runs(&["vim", "claude"]));
+        assert!(!runs(&["pwsh", "-NoExit", "-Command", "& 'claude'"]), "PowerShell back in front after Claude exits");
+        assert!(!runs(&["zsh", "-lic", "\"$@\"; exec \"$0\" -li", "zsh", "claude"]), "the launcher shell, not Claude");
+        assert!(!runs(&["nvim", "x.rs"]));
+        assert!(!runs(&["zsh"]));
+        assert!(!runs(&[]));
+        // A person's own agent: its `run` program counts.
+        let mut mine = t;
+        mine.programs.insert("claude-alt".into(), Entry { run: vec!["my-claude-alt".into()], ..Entry::default() });
+        assert!(runs_agent_in(&mine, &["/usr/local/bin/my-claude-alt".to_string()]));
     }
 
     #[test]

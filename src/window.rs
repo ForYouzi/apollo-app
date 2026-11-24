@@ -2328,9 +2328,15 @@ impl AppWindow {
                 alerts.push((addr.clone(), alert, looking));
             }
             changed |= self.model.set_word(addr, word, app, looking);
+            changed |= self.model.set_running(addr, runs_agent(rec));
             let turn = rec.get("turn").and_then(Value::as_u64).unwrap_or(0);
             let label = rec.pointer("/labels/herdr.seen").and_then(Value::as_str).and_then(|s| s.parse::<u64>().ok());
             changed |= self.model.set_turn(addr, turn, label.max(self.written_seen.get(addr).copied()));
+        }
+        // A terminal that's gone no longer runs anything.
+        let gone: Vec<String> = self.model.agents.iter().filter(|(a, x)| x.running && !self.live.contains_key(*a)).map(|(a, _)| a.clone()).collect();
+        for addr in gone {
+            changed |= self.model.set_running(&addr, false);
         }
         self.written_seen.retain(|a, _| self.live.contains_key(a));
         changed |= self.share_seen(cx);
@@ -5486,6 +5492,15 @@ fn adoptable(record: &Value, space: &str, tab: Option<&str>, machine: Option<&st
         && labeled_tab == tab.map(|t| crate::mirror::local(t, machine))
 }
 
+/// A known agent runs in a top-level terminal: its foreground process (never
+/// its launch argv, which still names an agent after it exits) is one. Sub-agents
+/// are listed only when they report, as before.
+fn runs_agent(record: &Value) -> bool {
+    let top = record.get("parent").and_then(Value::as_str).is_none_or(str::is_empty);
+    let argv: Vec<String> = record.pointer("/foreground/argv").and_then(Value::as_array).into_iter().flatten().filter_map(|a| a.as_str().map(str::to_owned)).collect();
+    top && crate::programs::runs_agent(&argv)
+}
+
 fn program_of(report: &Value, argv: Option<&Value>) -> Value {
     let app = report.get("app").and_then(Value::as_str);
     let argv: Vec<String> = argv.and_then(Value::as_array).into_iter().flatten().filter_map(|a| a.as_str().map(str::to_owned)).collect();
@@ -5740,6 +5755,20 @@ fn reconcile_core_update_error(dismissed: &mut Option<String>, core: &crate::upd
 
 #[cfg(test)]
 mod tests {
+
+    /// What counts as a running agent for the lists: the program in front of
+    /// a top-level terminal. A sub-agent (it has a parent) is listed only when
+    /// it reports, as before, so `agent.next` keeps cycling.
+    #[test]
+    fn a_running_agent_is_the_foreground_of_a_top_level_terminal() {
+        let rec = |fg: serde_json::Value, argv: &[&str], parent: Option<&str>| serde_json::json!({"argv": argv, "foreground": fg, "parent": parent});
+        let claude = serde_json::json!({"pid": 5, "name": "claude", "argv": ["claude"], "cwd": "/w"});
+        let pwsh = serde_json::json!({"pid": 4, "name": "pwsh.exe", "argv": ["pwsh.exe", "-NoExit", "-Command", "& 'claude'"], "cwd": "/w"});
+        assert!(super::runs_agent(&rec(claude.clone(), &["zsh"], None)));
+        assert!(!super::runs_agent(&rec(claude, &["zsh"], Some("t1"))), "sub-agent");
+        assert!(!super::runs_agent(&rec(pwsh, &["pwsh.exe", "-NoExit", "-Command", "& 'claude'"], None)), "Claude exited; PowerShell in front");
+        assert!(!super::runs_agent(&rec(serde_json::Value::Null, &["claude"], None)), "no foreground: not the root argv");
+    }
 
     /// The corner pill: a newer Apollo is a download, never "ready to restart";
     /// dismissing it hides that version only.
