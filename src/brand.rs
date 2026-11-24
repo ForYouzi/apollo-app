@@ -359,7 +359,7 @@ mod tests {
     /// `"Herdr layout = …"` (user keymaps bind to them, src/keys.rs:120), herdr-core, herdr-app, HERDR_*.
     #[test]
     fn no_user_visible_herdr() {
-        let internal = fancy_regex::Regex::new(r#"key_context\((?:format!\()?"Herdr(?: layout = \{\})?"|=> Ok\("Herdr"\.into\(\)\)|[Hh]erdr-(?:core|app)|HERDR_\w+"#).unwrap();
+        let internal = fancy_regex::Regex::new(r#"key_context\((?:format!\()?"Herdr(?: layout = \{\})?"|=> Ok\((?:Identifier\()?"Herdr"\.into\(\)\)|[Hh]erdr-(?:core|app)|HERDR_\w+"#).unwrap();
         // `"…\nHerdr"`: the escape's `n` is a word character, so \b alone misses it.
         let visible = fancy_regex::Regex::new(r"(?:\\n|\b)Herdr\b").unwrap();
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
