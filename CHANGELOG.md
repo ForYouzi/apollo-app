@@ -1,5 +1,15 @@
 # Apollo changelog
 
+## [0.0.10] - 2026-11-24
+
+Takes Herdr 0.1.18 (entries below for 0.1.17 and 0.1.18): Shift+click extends a terminal selection, panes you're not in can fade, a separate bold font weight, `agent.select`, your own notes in `AGENTS.local.md`, more for mod authors, and Files and Changes using far less CPU on big repositories. (#42)
+
+### New
+- **F2 renames the pane you're in.** Alt+F2 renames the tab (it was F2), and Shift+F2 still renames the space. If your keys.json is unedited, it upgrades on its own. (#39, #40)
+
+### Fixed
+- **A Claude Code pane no longer drops off the agents list while it runs.** herdr-core clears an agent's status whenever the pane's own shell is in front, even for a moment, and the agent may not report again for a while. A known agent running in a pane by its own name (claude, codex, cursor's agent, …) now shows as idle until it reports again; agents started through node, like npm installs, still show only while they report. (#43)
+
 ## [0.0.9] - 2026-11-21
 
 Takes Herdr's later changes up to 317e673: the Files preview and Changes diff follow `font_size`, toasts grow to show their whole text, a peeked terminal stays on its own machine, bare repos in `<project>/.bare` take their project's name, cursor:// and vscode:// remote links open on click, the command palette offers the themes that fit the window, BoldCreate and swival as built-in agents, and emoji in agent names. (#34)
