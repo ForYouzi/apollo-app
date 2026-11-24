@@ -394,6 +394,12 @@ Show the previous agent.
 
 No arguments.
 
+## `agent.resume`
+
+Bring Claude Code panes back in their own conversations after a restart (the ones offered when the app opens later).
+
+No arguments.
+
 ## `layout.switch`
 
 Show a layout (layouts/<name>.json), or the next one.

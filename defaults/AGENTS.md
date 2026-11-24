@@ -137,9 +137,12 @@ the highlighted line shows where it will land.
   and mod panes stay. An exited or killed terminal is closed, not restarted.
   Claude Code panes come back in their own conversation: while it runs, Apollo
   reads Claude's `~/.claude/sessions/<pid>.json` and keeps the conversation in
-  the terminal's `apollo.resume` label; when that terminal's new shell is idle,
-  Apollo types `cd <folder> && claude <its flags> --resume <id>` once (zsh,
-  bash, sh, fish, PowerShell; not cmd). Quitting Claude drops the label.
+  the terminal's `apollo.resume` label. When Apollo sees that terminal come
+  back with a new idle shell, it types `cd <folder> && claude <its flags>
+  --resume <id>` once (zsh, bash, sh, fish, PowerShell; not cmd). If Apollo
+  opens after they came back (a reboot), it never types into a shell someone
+  may have used: a toast offers to resume them (`agent.resume`). It never
+  edits what's on a prompt line. Quitting Claude drops the label.
   `restore_agents: false` in settings.json turns this off.
   Focus, zoom, recent spaces, settled tabs and seen attention stay on this screen.
 - Every terminal is a core terminal. Apollo labels the ones it starts with
@@ -689,7 +692,8 @@ The main ones:
   started, including its release outside the pane; other panes don't receive it.
   Terminals display Kitty graphics, including Unicode placeholder images used by
   programs such as yazi; partial images and scrolling follow the placeholder cells.
-- Agents: `agent.next`, `agent.prev`, `agent.focus {terminal}`.
+- Agents: `agent.next`, `agent.prev`, `agent.focus {terminal}`, `agent.resume`
+  (bring back the Claude Code panes Apollo offers after a restart).
 - Layout: `layout.switch {name?}`, `layout.toggle {id}`, `layout.show {id}`, `layout.hide {id}`,
   `layout.resize {id, px | weight}`, `layout.select {stack, child}`, `layout.set {layout}`
   (personal tree edits; on shipped layouts only click/look fields change),

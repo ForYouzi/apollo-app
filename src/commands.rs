@@ -76,6 +76,7 @@ pub const COMMANDS: &[Command] = &[
     cmd("agent.focus", &[req("terminal")], "Show an agent (sub-agents too)."),
     cmd("agent.next", &[], "Show the next agent, in the order the agents list shows them."),
     cmd("agent.prev", &[], "Show the previous agent."),
+    cmd("agent.resume", &[], "Bring Claude Code panes back in their own conversations after a restart (the ones offered when the app opens later)."),
     cmd("layout.switch", &[opt("name")], "Show a layout (layouts/<name>.json), or the next one."),
     cmd("layout.clone", &[req("name"), opt("as")], "Duplicate a layout as <name>-copy (or as), then show it."),
     cmd("mod.clone", &[req("name"), opt("as")], "Duplicate a mod as <name>-copy (or as)."),

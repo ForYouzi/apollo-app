@@ -34,6 +34,16 @@ pub fn transcript(home: &Path, config_dir: Option<&str>, cwd: &str, id: &str) ->
     claude_dir(home, config_dir).join("projects").join(slug).join(format!("{id}.jsonl"))
 }
 
+/// Whether a file is gone: `Some(true)` only when the system says it isn't
+/// there; `None` when it can't tell (permissions, I/O).
+pub fn gone(path: &Path) -> Option<bool> {
+    match std::fs::metadata(path) {
+        Ok(_) => Some(false),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(true),
+        Err(_) => None,
+    }
+}
+
 /// Whether Claude has the conversation's transcript.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Found {
@@ -46,18 +56,23 @@ pub enum Found {
 /// Claude's own folder for `cwd` first; it shortens long names, so then every
 /// project folder (an id is unique).
 pub fn find_transcript(home: &Path, config_dir: Option<&str>, cwd: &str, id: &str) -> Found {
-    if transcript(home, config_dir, cwd, id).is_file() {
-        return Found::Yes;
+    let mut unsure = false;
+    match gone(&transcript(home, config_dir, cwd, id)) {
+        Some(false) => return Found::Yes,
+        None => unsure = true,
+        Some(true) => {}
     }
     let Ok(projects) = std::fs::read_dir(claude_dir(home, config_dir).join("projects")) else { return Found::Unknown };
     let name = format!("{id}.jsonl");
     for entry in projects {
         let Ok(entry) = entry else { return Found::Unknown };
-        if entry.path().join(&name).is_file() {
-            return Found::Yes;
+        match gone(&entry.path().join(&name)) {
+            Some(false) => return Found::Yes,
+            None => unsure = true,
+            Some(true) => {}
         }
     }
-    Found::No
+    if unsure { Found::Unknown } else { Found::No }
 }
 
 fn claude_dir(home: &Path, config_dir: Option<&str>) -> PathBuf {
@@ -94,12 +109,25 @@ const TAKES_VALUES: &[&str] = &[
     "--add-dir", "--allowedTools", "--allowed-tools", "--disallowedTools", "--disallowed-tools", "--tools",
     "--mcp-config", "--betas", "--file",
 ];
-/// Dropped with their value: a resume picks its own conversation.
-const DROP_WITH_VALUE: &[&str] = &["--resume", "-r", "--session-id", "--from-pr", "--teleport", "--cloud", "--environment"];
+/// Options that may take a value (`-d api`): kept with it, as Claude parses them.
+const MAYBE_VALUE: &[&str] = &["--debug", "-d", "--prompt-suggestions"];
+/// Flags without a value that a resumed session keeps.
+const FLAGS: &[&str] = &[
+    "--allow-dangerously-skip-permissions", "--dangerously-skip-permissions", "--ax-screen-reader", "--bare", "--brief",
+    "--chrome", "--no-chrome", "--disable-slash-commands", "--exclude-dynamic-system-prompt-sections",
+    "--forward-subagent-text", "--ide", "--include-hook-events", "--include-partial-messages",
+    "--no-session-persistence", "--replay-user-messages", "--restricted", "--safe-mode", "--strict-mcp-config", "--verbose",
+];
+/// Dropped with their value: a resume picks its own conversation, and these
+/// start somewhere else (another worktree, tmux, a remote or desktop session).
+const DROP_WITH_VALUE: &[&str] = &[
+    "--resume", "-r", "--session-id", "--from-pr", "--teleport", "--cloud", "--environment",
+    "--worktree", "-w", "--remote-control", "--tmux",
+];
 /// Options whose value may be inline JSON (secrets, servers): kept only as a file path.
 const JSON_OR_FILE: &[&str] = &["--settings", "--mcp-config", "--agents", "--json-schema"];
 /// Dropped alone: they start another conversation or don't stay interactive.
-const DROP: &[&str] = &["--continue", "-c", "--fork-session", "--print", "-p", "--bg", "--background"];
+const DROP: &[&str] = &["--continue", "-c", "--fork-session", "--print", "-p", "--bg", "--background", "--desktop", "--help", "-h", "--version", "-v"];
 
 /// The agent's own options from its argv, without what picks a conversation
 /// and without a first message (a positional prompt would be sent again).
@@ -139,7 +167,7 @@ pub fn clean_argv(argv: &[String]) -> Option<Vec<String>> {
                 out.push(a.clone());
                 out.extend(values);
             }
-        } else if TAKES_VALUE.contains(&name) {
+        } else if TAKES_VALUE.contains(&name) || MAYBE_VALUE.contains(&name) {
             let value = if inline { a.split_once('=').map(|(_, v)| v.to_owned()) } else { next_is_value(i + 1).then(|| argv[i + 1].clone()) };
             let skip = JSON_OR_FILE.contains(&name) && value.as_deref().is_some_and(inline_json);
             if !skip {
@@ -147,9 +175,13 @@ pub fn clean_argv(argv: &[String]) -> Option<Vec<String>> {
                 if !inline { out.extend(value.clone()); }
             }
             i += if !inline && value.is_some() { 2 } else { 1 };
-        } else {
+        } else if FLAGS.contains(&name) && !inline {
             out.push(a.clone());
             i += 1;
+        } else {
+            // An option this doesn't know: dropped with what may be its value,
+            // so neither it nor a first message after it comes back.
+            i += if !inline && next_is_value(i + 1) { 2 } else { 1 };
         }
     }
     Some(out)
@@ -187,9 +219,8 @@ pub enum Shell {
 
 /// The shell a terminal shows now (core's `foreground.name`), or None (cmd, nu, a program).
 pub fn shell_kind(name: &str) -> Option<Shell> {
-    let base = name.rsplit(['/', '\\']).next().unwrap_or(name).trim_start_matches('-');
-    let base = base.strip_suffix(".exe").or_else(|| base.strip_suffix(".EXE")).unwrap_or(base).to_ascii_lowercase();
-    match base.as_str() {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or(name).trim_start_matches('-').to_ascii_lowercase();
+    match base.strip_suffix(".exe").unwrap_or(&base) {
         "sh" | "bash" | "zsh" | "dash" | "ksh" => Some(Shell::Posix),
         "fish" => Some(Shell::Fish),
         "pwsh" | "powershell" => Some(Shell::PowerShell),
@@ -343,8 +374,16 @@ fn natural(addr: &str) -> (usize, String) {
 pub struct State {
     /// Terminals and conversations being resumed right now.
     pub busy: HashSet<String>,
-    /// Conversations already brought back this run: never a second copy.
-    pub resumed: HashSet<String>,
+    /// Each conversation brought back this run, and the terminal it's in:
+    /// that terminal may bring it back again (another crash), no other may.
+    pub resumed: std::collections::HashMap<String, String>,
+    /// Each terminal's shell pid as Apollo first saw it, and when: a new pid
+    /// seen moments ago, after an old one, is a recovery Apollo watched.
+    pub seen: std::collections::HashMap<String, (u64, std::time::Instant, bool)>,
+    /// (terminal, shell pid) already offered to the person.
+    pub offered: HashSet<(String, u64)>,
+    /// The person asked (agent.resume): resume what was only offered.
+    pub force: bool,
     /// (terminal, its shell pid) tried and not resumed (no transcript yet, a failed send):
     /// not again for a minute.
     pub tried: std::collections::HashMap<(String, u64), std::time::Instant>,
@@ -398,17 +437,42 @@ impl Files {
     }
 }
 
+/// What a pass did.
+#[derive(Debug, Default, PartialEq)]
+pub struct Pass {
+    /// Typed into: back in their conversations.
+    pub resumed: Vec<String>,
+    /// Ready, but Apollo didn't see them recover (opened after a reboot): the
+    /// shell may hold someone's draft, so the person is asked first.
+    pub offered: Vec<String>,
+}
+
+/// How soon after Apollo sees a recovered shell it may type into it.
+const FRESH: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// One pass over the live terminals, off the UI thread: labels recipes,
-/// drops stale ones, and types each due resume once, 500 ms apart.
-/// `busy` holds terminals and conversations being resumed (shared with the
-/// next pass, so neither is resumed twice); returns the addresses resumed.
-pub fn tend(core: &dyn Calls, files: &Files, records: &[Value], restore: &dyn Fn() -> bool, state: &std::sync::Mutex<State>) -> Vec<String> {
+/// drops stale ones, and resumes what's due, 500 ms apart. Apollo never
+/// edits a prompt line: it types only into a shell whose recovery it
+/// watched (moments ago), or after the person says so (`State::force`).
+pub fn tend(core: &dyn Calls, files: &Files, records: &[Value], restore: &dyn Fn() -> bool, state: &std::sync::Mutex<State>) -> Pass {
+    let now = std::time::Instant::now();
     let mut due = Vec::new();
+    let mut pass = Pass::default();
     for record in records {
-        let Some(address) = record["address"].as_str() else { continue };
-        if state.lock().is_ok_and(|s| s.busy.contains(address)) {
-            continue;
-        }
+        let (Some(address), Some(pid)) = (record["address"].as_str(), record["pid"].as_u64()) else { continue };
+        let witnessed = {
+            let Ok(mut s) = state.lock() else { return pass };
+            if s.busy.contains(address) || s.tried.get(&(address.to_owned(), pid)).is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(60)) {
+                continue;
+            }
+            // (this shell, when Apollo first saw it, whether it replaced one Apollo saw)
+            let entry = match s.seen.get(address).copied() {
+                Some((p, at, replaced)) if p == pid => (p, at, replaced),
+                before => (pid, now, before.is_some()),
+            };
+            s.seen.insert(address.to_owned(), entry);
+            entry.2 && entry.1.elapsed() < FRESH
+        };
         match step(record) {
             Some(Step::Read { pid }) => {
                 let text = std::fs::read_to_string(session_file(&files.home, files.config_dir.as_deref(), pid)).ok();
@@ -419,18 +483,19 @@ pub fn tend(core: &dyn Calls, files: &Files, records: &[Value], restore: &dyn Fn
             }
             Some(Step::Clear) => {
                 // The shell can flash into the foreground while Claude runs (a tool
-                // run): it only quit if its session file is gone (removed on exit).
+                // run): it only quit when its session file is gone (removed on exit).
                 let recipe = record.pointer(&format!("/labels/{LABEL}")).and_then(Value::as_str).and_then(Recipe::from_label);
-                if recipe.is_some_and(|r| !session_file(&files.home, files.config_dir.as_deref(), r.agent).exists()) {
+                if recipe.is_some_and(|r| gone(&session_file(&files.home, files.config_dir.as_deref(), r.agent)) == Some(true)) {
                     set_label(core, address, "");
                 }
             }
-            Some(Step::Resume { recipe, shell }) => due.push((address.to_owned(), Step::Resume { recipe, shell })),
+            Some(Step::Resume { recipe, shell }) => due.push((address.to_owned(), pid, witnessed, Step::Resume { recipe, shell })),
             None => {}
         }
     }
-    let mut resumed = Vec::new();
-    for (address, recipe, shell) in resumes(due.iter().map(|(a, s)| (a.as_str(), s)), &HashSet::new()) {
+    let picked = resumes(due.iter().map(|(a, _, _, s)| (a.as_str(), s)), &HashSet::new());
+    for (address, recipe, shell) in picked {
+        let Some(&(_, pid, witnessed, _)) = due.iter().find(|(a, ..)| *a == address) else { continue };
         // Read again before each one: turning it off stops what's queued.
         if !restore() {
             break;
@@ -438,33 +503,59 @@ pub fn tend(core: &dyn Calls, files: &Files, records: &[Value], restore: &dyn Fn
         let session = format!("session:{}", recipe.id);
         {
             let Ok(mut s) = state.lock() else { break };
-            if s.resumed.contains(&recipe.id) {
-                // Already back in another pane this run: no second copy here.
+            if s.resumed.get(&recipe.id).is_some_and(|t| *t != address) {
+                // Already back in another pane this run: no copy here. Its recipe
+                // goes only if a fresh read still shows this one.
                 drop(s);
-                set_label(core, &address, "");
+                if let Ok(now) = core.call("terminal.get", json!({"terminal": address})) {
+                    let still = now.pointer(&format!("/labels/{LABEL}")).and_then(Value::as_str).and_then(Recipe::from_label);
+                    if still.as_ref() == Some(&recipe) {
+                        set_label(core, &address, "");
+                    }
+                }
+                continue;
+            }
+            if !witnessed && !s.force {
+                if s.offered.insert((address.clone(), pid)) {
+                    pass.offered.push(address.clone());
+                }
                 continue;
             }
             if s.busy.contains(&address) || !s.busy.insert(session.clone()) {
                 continue;
             }
             s.busy.insert(address.clone());
+            // Claimed before typing: a slow send can't let another pane take it.
+            s.resumed.insert(recipe.id.clone(), address.clone());
         }
         let done = resume_one(core, files, &address, &recipe, shell);
         if let Ok(mut s) = state.lock() {
             s.busy.remove(&session);
             s.busy.remove(&address);
-            if done {
-                s.resumed.insert(recipe.id.clone());
-            } else if let Some(pid) = records.iter().find(|r| r["address"] == address.as_str()).and_then(|r| r["pid"].as_u64()) {
+            if !done {
                 s.tried.insert((address.clone(), pid), std::time::Instant::now());
+                if s.resumed.get(&recipe.id) == Some(&address) && done_marked(core, &address, pid) == Some(false) {
+                    // Nothing was marked or typed: this conversation is free again.
+                    s.resumed.remove(&recipe.id);
+                }
             }
         }
         if done {
-            resumed.push(address);
+            pass.resumed.push(address);
             std::thread::sleep(std::time::Duration::from_millis(500));
         }
     }
-    resumed
+    if let Ok(mut s) = state.lock() {
+        s.force = false;
+    }
+    pass
+}
+
+/// Whether a terminal's recipe already names this shell (a resume was marked).
+fn done_marked(core: &dyn Calls, address: &str, pid: u64) -> Option<bool> {
+    let now = core.call("terminal.get", json!({"terminal": address})).ok()?;
+    let recipe = now.pointer(&format!("/labels/{LABEL}")).and_then(Value::as_str).and_then(Recipe::from_label)?;
+    Some(recipe.shell == pid)
 }
 
 /// Checks the terminal again right before typing, marks it, then types.
@@ -489,12 +580,7 @@ fn resume_one(core: &dyn Calls, files: &Files, address: &str, recipe: &Recipe, s
     if core.call("terminal.label", json!({"terminal": address, "labels": {LABEL: marked.label()}})).is_err() {
         return false;
     }
-    // Whatever is on the prompt line goes first, so the resume isn't appended to it.
-    let clear = if shell == Shell::PowerShell { "esc" } else { "ctrl+u" };
-    if let Err(e) = core.call("terminal.keys", json!({"terminal": address, "keys": [clear]})) {
-        tracing::warn!("resume: {address}: {e}");
-        return false;
-    }
+    // The core holds this while a person has an unfinished draft there.
     let line = resume_line(shell, &recipe.cwd, &recipe.argv, &recipe.id);
     match core.call("terminal.send", json!({"terminal": address, "text": line})) {
         Ok(_) => {
@@ -502,6 +588,7 @@ fn resume_one(core: &dyn Calls, files: &Files, address: &str, recipe: &Recipe, s
             true
         }
         Err(e) => {
+            // Marked already: never typed twice, even if the send went through late.
             tracing::warn!("resume: {address}: {e}");
             false
         }
@@ -723,7 +810,7 @@ mod tests {
                     }
                     Ok(json!({}))
                 }
-                "terminal.send" | "terminal.keys" => Ok(json!({})),
+                "terminal.send" => Ok(json!({})),
                 _ => Err(format!("unexpected {method}")),
             }
         }
@@ -747,7 +834,7 @@ mod tests {
         let busy = std::sync::Mutex::new(State::default());
 
         // While Claude runs: labeled.
-        assert!(tend(&core, &files, &[running], &|| true, &busy).is_empty());
+        assert_eq!(tend(&core, &files, &[running], &|| true, &busy), Pass::default());
         let labeled = core.records.lock().unwrap()["t1"].clone();
         let recipe = Recipe::from_label(labeled["labels"][LABEL].as_str().unwrap()).unwrap();
         assert_eq!(recipe, Recipe { id: ID.into(), cwd: "/w/my app".into(), argv: s(&["claude", "--model", "opus"]), shell: 100, agent: 500 });
@@ -758,13 +845,13 @@ mod tests {
         back["pid"] = 200.into();
         back["foreground"] = json!({"pid": 200, "name": "zsh", "argv": ["-zsh"], "cwd": "/w/my app"});
         core.records.lock().unwrap().insert("t1".into(), back.clone());
-        assert!(tend(&core, &files, &[back.clone()], &|| true, &busy).is_empty());
+        assert!(tend(&core, &files, &[back.clone()], &|| true, &busy).resumed.is_empty());
         assert!(core.records.lock().unwrap()["t1"]["labels"].get(LABEL).is_some());
         assert!(due(&[back.clone()], &busy.lock().unwrap()).is_empty(), "not again right away");
         // The folder is there but the conversation isn't: the recipe goes.
         std::fs::create_dir_all(home.join(".claude/projects/elsewhere")).unwrap();
-        *busy.lock().unwrap() = State::default();
-        assert!(tend(&core, &files, &[back.clone()], &|| true, &busy).is_empty());
+        busy.lock().unwrap().tried.clear();
+        assert!(tend(&core, &files, &[back.clone()], &|| true, &busy).resumed.is_empty());
         assert!(core.records.lock().unwrap()["t1"]["labels"].get(LABEL).is_none());
         core.records.lock().unwrap().insert("t1".into(), back.clone());
 
@@ -774,18 +861,19 @@ mod tests {
         std::fs::write(&t, "{}\n").unwrap();
         core.records.lock().unwrap().insert("t1".into(), back.clone());
         core.calls.lock().unwrap().clear();
-        assert_eq!(tend(&core, &files, &[back.clone()], &|| true, &busy), ["t1"]);
+        busy.lock().unwrap().tried.clear();
+        assert_eq!(tend(&core, &files, &[back.clone()], &|| true, &busy).resumed, ["t1"]);
         let calls = core.calls.lock().unwrap().clone();
         let sends: Vec<&Value> = calls.iter().filter(|(m, _)| m == "terminal.send").map(|(_, p)| p).collect();
         assert_eq!(sends.len(), 1);
         assert_eq!(sends[0]["text"], format!("cd '/w/my app' && claude --model opus --resume {ID}"));
         let order: Vec<&str> = calls.iter().map(|(m, _)| m.as_str()).collect();
-        assert_eq!(order, ["terminal.get", "terminal.label", "terminal.keys", "terminal.send"], "marked, line cleared, then typed");
+        assert_eq!(order, ["terminal.get", "terminal.label", "terminal.send"], "marked, then typed; the line is never edited");
 
         // The next pass sees the marked label: same shell at its prompt means nothing to resume.
         let after = core.records.lock().unwrap()["t1"].clone();
         assert_eq!(Recipe::from_label(after["labels"][LABEL].as_str().unwrap()).unwrap().shell, 200);
-        assert!(tend(&core, &files, &[after], &|| true, &busy).is_empty());
+        assert_eq!(tend(&core, &files, &[after], &|| true, &busy), Pass::default());
         assert_eq!(core.calls.lock().unwrap().iter().filter(|(m, _)| m == "terminal.send").count(), 1);
         std::fs::remove_dir_all(home).unwrap();
     }
@@ -800,13 +888,14 @@ mod tests {
         let r = Recipe { id: ID.into(), cwd: "/w".into(), argv: s(&["claude"]), shell: 100, agent: 500 };
         let back = record("t1", 200, json!({"pid": 200, "name": "zsh", "argv": ["-zsh"], "cwd": "/w"}), Some(&r));
         let core = FakeCore { records: std::sync::Mutex::new([("t1".to_owned(), back.clone())].into()), calls: Default::default() };
-        let busy = std::sync::Mutex::new(State::default());
-        assert!(tend(&core, &files, &[back.clone()], &|| false, &busy).is_empty(), "restore_agents: false");
+        let busy = std::sync::Mutex::new(State { force: true, ..State::default() });
+        assert!(tend(&core, &files, &[back.clone()], &|| false, &busy).resumed.is_empty(), "restore_agents: false");
         // The person started something in the pane after the listing.
         let mut changed = back.clone();
         changed["foreground"] = json!({"pid": 300, "name": "vim", "argv": ["vim"], "cwd": "/w"});
         core.records.lock().unwrap().insert("t1".into(), changed);
-        assert!(tend(&core, &files, &[back], &|| true, &busy).is_empty());
+        busy.lock().unwrap().force = true;
+        assert!(tend(&core, &files, &[back], &|| true, &busy).resumed.is_empty());
         assert!(core.calls.lock().unwrap().iter().all(|(m, _)| m != "terminal.send"));
         std::fs::remove_dir_all(home).unwrap();
     }
@@ -853,7 +942,7 @@ mod tests {
         let runs_claude = |core: &crate::hc::Core| get(core)["foreground"]["argv"].as_array().is_some_and(|a| a.iter().any(|w| w.as_str().is_some_and(|w| w.ends_with("/claude"))));
         wait("claude running", &|| runs_claude(&core));
         wait("session file", &|| std::fs::read_dir(home.join(".claude/sessions")).unwrap().count() > 0);
-        assert!(tend(core.as_ref(), &files, &[get(&core)], &|| true, &busy).is_empty());
+        assert_eq!(tend(core.as_ref(), &files, &[get(&core)], &|| true, &busy), Pass::default());
         let label = get(&core)["labels"][LABEL].as_str().unwrap().to_owned();
         let recipe = Recipe::from_label(&label).unwrap();
         assert_eq!(recipe.argv, s(&["claude", "--model", "opus"]));
@@ -869,13 +958,13 @@ mod tests {
         wait("a new shell", &|| get(&core)["pid"].as_u64().is_some_and(|p| p != before) && foreground_is(&core, "zsh"));
         assert_eq!(Recipe::from_label(get(&core)["labels"][LABEL].as_str().unwrap()), Some(recipe.clone()), "the label survived the restart");
 
-        assert_eq!(tend(core.as_ref(), &files, &[get(&core)], &|| true, &busy), [t1.clone()]);
+        assert_eq!(tend(core.as_ref(), &files, &[get(&core)], &|| true, &busy).resumed, [t1.clone()], "a recovery Apollo watched: typed without asking");
         wait("resumed", &|| root.join("resumed").exists());
         let line = std::fs::read_to_string(root.join("resumed")).unwrap();
         assert_eq!(line.trim(), format!("resumed: --model opus --resume {ID}"));
         // Never twice: the next pass sees the marked shell.
         std::fs::remove_file(root.join("resumed")).unwrap();
-        assert!(tend(core.as_ref(), &files, &[get(&core)], &|| true, &busy).is_empty());
+        assert_eq!(tend(core.as_ref(), &files, &[get(&core)], &|| true, &busy), Pass::default());
         let _ = core.call("terminal.kill", json!({"terminal": t1}));
     }
 
@@ -942,9 +1031,11 @@ mod tests {
         let b = record("t2", 201, json!({"pid": 201, "name": "zsh", "argv": ["-zsh"], "cwd": "/w"}), Some(&r));
         let core = FakeCore { records: std::sync::Mutex::new([("t1".to_owned(), a.clone()), ("t2".to_owned(), b.clone())].into()), calls: Default::default() };
         let state = std::sync::Mutex::new(State::default());
-        assert_eq!(tend(&core, &files, &[a.clone()], &|| true, &state), ["t1"]);
+        state.lock().unwrap().force = true;
+        assert_eq!(tend(&core, &files, &[a.clone()], &|| true, &state).resumed, ["t1"]);
         // A later pass sees t2 with the same conversation: no second copy; its recipe goes.
-        assert!(tend(&core, &files, &[b.clone()], &|| true, &state).is_empty());
+        state.lock().unwrap().force = true;
+        assert!(tend(&core, &files, &[b.clone()], &|| true, &state).resumed.is_empty());
         assert_eq!(core.calls.lock().unwrap().iter().filter(|(m, _)| m == "terminal.send").count(), 1);
         assert!(core.records.lock().unwrap()["t2"]["labels"].get(LABEL).is_none());
 
@@ -962,7 +1053,7 @@ mod tests {
     }
 
     #[test]
-    fn the_line_is_cleared_first_and_turning_it_off_stops_queued_sends() {
+    fn turning_it_off_stops_queued_sends() {
         let home = scratch("clear");
         let files = Files { home: home.clone(), config_dir: None };
         let t = transcript(&home, None, "/w", ID);
@@ -975,17 +1066,131 @@ mod tests {
         let a = record("t1", 200, json!({"pid": 200, "name": "pwsh.exe", "argv": ["pwsh.exe"], "cwd": "/w"}), Some(&r));
         let b = record("t2", 201, json!({"pid": 201, "name": "zsh", "argv": ["-zsh"], "cwd": "/w"}), Some(&Recipe { id: other, ..r.clone() }));
         let core = FakeCore { records: std::sync::Mutex::new([("t1".to_owned(), a.clone()), ("t2".to_owned(), b.clone())].into()), calls: Default::default() };
-        let state = std::sync::Mutex::new(State::default());
+        let state = std::sync::Mutex::new(State { force: true, ..State::default() });
         let on = std::sync::atomic::AtomicBool::new(true);
         // Turned off after the first send: the second never goes.
         let restore = || on.swap(false, std::sync::atomic::Ordering::SeqCst);
-        assert_eq!(tend(&core, &files, &[a, b], &restore, &state), ["t1"]);
-        let calls = core.calls.lock().unwrap().clone();
-        let keys: Vec<&Value> = calls.iter().filter(|(m, _)| m == "terminal.keys").map(|(_, p)| p).collect();
-        assert_eq!(keys.len(), 1);
-        assert_eq!(keys[0]["keys"], json!(["esc"]), "PowerShell: Esc empties the line");
-        let order: Vec<&str> = calls.iter().map(|(m, _)| m.as_str()).collect();
-        assert_eq!(order, ["terminal.get", "terminal.label", "terminal.keys", "terminal.send"]);
+        assert_eq!(tend(&core, &files, &[a, b], &restore, &state).resumed, ["t1"]);
+        let sent = sends(&core);
+        assert_eq!(sent.len(), 1);
+        assert!(sent[0].1.starts_with("Set-Location -LiteralPath '/w'; if ($?) { & 'claude'"), "{}", sent[0].1);
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    /// QA findings (gpt-6.2-astra, round 2).
+    #[test]
+    fn unknown_options_go_with_their_value_known_flags_stay() {
+        assert_eq!(clean_argv(&s(&["claude", "--advisor", "opus", "--verbose", "task"])).unwrap(), s(&["claude", "--verbose"]));
+        assert_eq!(clean_argv(&s(&["claude", "--advisor=opus", "--bare"])).unwrap(), s(&["claude", "--bare"]));
+        assert_eq!(clean_argv(&s(&["claude", "-d", "api", "--safe-mode"])).unwrap(), s(&["claude", "-d", "api", "--safe-mode"]));
+        assert_eq!(clean_argv(&s(&["claude", "--worktree", "feat", "--tmux", "--remote-control", "x", "--model", "opus"])).unwrap(), s(&["claude", "--model", "opus"]));
+        assert_eq!(shell_kind("PowerShell.Exe"), Some(Shell::PowerShell));
+    }
+
+    fn fixture(name: &str) -> (PathBuf, Files) {
+        let home = scratch(name);
+        let files = Files { home: home.clone(), config_dir: None };
+        for id in [ID.to_owned(), ID.replace('9', "8")] {
+            let t = transcript(&home, None, "/w", &id);
+            std::fs::create_dir_all(t.parent().unwrap()).unwrap();
+            std::fs::write(&t, "{}\n").unwrap();
+        }
+        (home, files)
+    }
+
+    fn sends(core: &FakeCore) -> Vec<(String, String)> {
+        core.calls.lock().unwrap().iter().filter(|(m, _)| m == "terminal.send").map(|(_, p)| (p["terminal"].as_str().unwrap().to_owned(), p["text"].as_str().unwrap().to_owned())).collect()
+    }
+
+    #[test]
+    fn a_recovery_apollo_saw_resumes_one_it_didnt_is_offered_first() {
+        let (home, files) = fixture("seen");
+        let r = Recipe { id: ID.into(), cwd: "/w".into(), argv: s(&["claude"]), shell: 100, agent: 500 };
+        let running = record("t1", 100, json!({"pid": 500, "name": "claude", "argv": ["claude"], "cwd": "/w"}), Some(&r));
+        let back = record("t1", 200, json!({"pid": 200, "name": "zsh", "argv": ["-zsh"], "cwd": "/w"}), Some(&r));
+        let core = FakeCore { records: std::sync::Mutex::new([("t1".to_owned(), back.clone())].into()), calls: Default::default() };
+
+        // Apollo saw shell 100, then 200 appeared: nobody could have typed yet. Resumed, nothing edited.
+        let state = std::sync::Mutex::new(State::default());
+        tend(&core, &files, &[running.clone()], &|| true, &state);
+        let pass = tend(&core, &files, &[back.clone()], &|| true, &state);
+        assert_eq!((pass.resumed.clone(), pass.offered.clone()), (vec!["t1".to_owned()], vec![]));
+        let order: Vec<String> = core.calls.lock().unwrap().iter().map(|(m, _)| m.clone()).collect();
+        assert!(!order.iter().any(|m| m == "terminal.keys"), "never edits the prompt line");
+
+        // Apollo opened after the reboot: the shell may hold someone's draft. Offered, not typed.
+        let core = FakeCore { records: std::sync::Mutex::new([("t1".to_owned(), back.clone())].into()), calls: Default::default() };
+        let state = std::sync::Mutex::new(State::default());
+        let pass = tend(&core, &files, &[back.clone()], &|| true, &state);
+        assert_eq!((pass.resumed.clone(), pass.offered.clone()), (vec![], vec!["t1".to_owned()]));
+        assert!(sends(&core).is_empty());
+        // Offered once per shell.
+        assert!(tend(&core, &files, &[back.clone()], &|| true, &state).offered.is_empty());
+        // The person said yes (agent.resume): typed then.
+        state.lock().unwrap().force = true;
+        assert_eq!(tend(&core, &files, &[back.clone()], &|| true, &state).resumed, ["t1"]);
+        assert_eq!(sends(&core).len(), 1);
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn a_second_crash_brings_the_same_pane_back_again_and_never_into_another() {
+        let (home, files) = fixture("again");
+        let r = Recipe { id: ID.into(), cwd: "/w".into(), argv: s(&["claude"]), shell: 100, agent: 500 };
+        let core = FakeCore { records: Default::default(), calls: Default::default() };
+        let state = std::sync::Mutex::new(State::default());
+        let at = |pid: u64, fg: u64, recipe: &Recipe| {
+            let (name, argv) = if pid == fg { ("zsh", "-zsh") } else { ("claude", "claude") };
+            record("t1", pid, json!({"pid": fg, "name": name, "argv": [argv], "cwd": "/w"}), Some(recipe))
+        };
+        let put = |rec: &Value| { core.records.lock().unwrap().insert(rec["address"].as_str().unwrap().into(), rec.clone()); rec.clone() };
+        std::fs::create_dir_all(home.join(".claude/sessions")).unwrap();
+        for pid in [500, 600] {
+            std::fs::write(home.join(format!(".claude/sessions/{pid}.json")), format!(r#"{{"sessionId":"{ID}","cwd":"/w","kind":"interactive"}}"#)).unwrap();
+        }
+        tend(&core, &files, &[put(&at(100, 500, &r))], &|| true, &state);
+        assert_eq!(tend(&core, &files, &[put(&at(200, 200, &r))], &|| true, &state).resumed, ["t1"]);
+        // Claude runs again (recaptured with shell 200), then the core crashes again.
+        let r2 = Recipe { shell: 200, agent: 600, ..r.clone() };
+        tend(&core, &files, &[put(&at(200, 600, &r2))], &|| true, &state);
+        assert_eq!(tend(&core, &files, &[put(&at(300, 300, &r2))], &|| true, &state).resumed, ["t1"], "same pane, same conversation: again");
+        // Another pane with that conversation: never a copy; its recipe goes only if it's still that one.
+        let other = put(&record("t2", 400, json!({"pid": 400, "name": "zsh", "argv": ["-zsh"], "cwd": "/w"}), Some(&r)));
+        state.lock().unwrap().force = true;
+        assert!(tend(&core, &files, &[other], &|| true, &state).resumed.is_empty());
+        assert_eq!(sends(&core).iter().filter(|(t, _)| t == "t2").count(), 0);
+        assert!(core.records.lock().unwrap()["t2"]["labels"].get(LABEL).is_none());
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_is_not_gone() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = scratch("perm");
+        let sessions = home.join(".claude/sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(sessions.join("500.json"), "{}").unwrap();
+        std::fs::set_permissions(&sessions, std::fs::Permissions::from_mode(0o000)).unwrap();
+        assert_eq!(gone(&sessions.join("500.json")), None, "can't tell");
+        std::fs::set_permissions(&sessions, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(gone(&sessions.join("500.json")), Some(false));
+        assert_eq!(gone(&sessions.join("501.json")), Some(true));
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn listings_wait_out_a_failed_try_too() {
+        let (home, files) = fixture("wait");
+        let r = Recipe { id: ID.into(), cwd: "/w".into(), argv: s(&["claude"]), shell: 100, agent: 500 };
+        let back = record("t1", 200, json!({"pid": 200, "name": "zsh", "argv": ["-zsh"], "cwd": "/w"}), Some(&r));
+        // A core that has no such terminal any more: the re-check fails.
+        let core = FakeCore { records: Default::default(), calls: Default::default() };
+        let state = std::sync::Mutex::new(State { force: true, ..State::default() });
+        assert!(tend(&core, &files, &[back.clone()], &|| true, &state).resumed.is_empty());
+        let asked = core.calls.lock().unwrap().len();
+        assert!(tend(&core, &files, &[back], &|| true, &state).resumed.is_empty());
+        assert_eq!(core.calls.lock().unwrap().len(), asked, "nothing asked again within the minute");
         std::fs::remove_dir_all(home).unwrap();
     }
 

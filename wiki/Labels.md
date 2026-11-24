@@ -77,7 +77,8 @@ folder from Claude's `~/.claude/sessions/<pid>.json`, Claude's options
 the terminal's shell pid and Claude's pid when it was read.
 
 When the terminal comes back with a different shell pid (its program was
-lost) and that shell is idle, Apollo types the resume line once and writes
-the new pid. The same pid back at a prompt means the person quit: Apollo
+lost) and that shell is idle, Apollo writes the new pid and types the resume
+line once: right away when it saw the recovery happen, otherwise after the
+person accepts the "Resume agents?" toast (`agent.resume`). The same pid back at a prompt means the person quit: Apollo
 removes the label. Other clients can ignore it; Apollo checks a label again
 before using it and never types one it wouldn't have written.

@@ -1729,17 +1729,27 @@ impl AppWindow {
         self.resume_at = Some(Instant::now());
         let (core, state, on) = (self.core.clone(), self.resume_state.clone(), self.resume_on.clone());
         cx.spawn_in(window, async move |this, cx| {
-            let resumed = cx.background_executor().spawn(async move {
+            let pass = cx.background_executor().spawn(async move {
                 // Read before each send, so turning it off stops what's queued.
                 let restore = || on.load(std::sync::atomic::Ordering::Relaxed);
                 crate::resume::tend(core.as_ref(), &crate::resume::Files::here(), &records, &restore, &state)
             }).await;
             let _ = this.update_in(cx, |this, window, cx| {
                 this.resume_running = false;
-                if !resumed.is_empty() && !this.draining {
-                    let n = resumed.len();
+                if this.draining { return; }
+                let n = pass.resumed.len();
+                if n > 0 {
                     let body = if n == 1 { "Claude Code is back in its conversation.".to_owned() } else { format!("{n} Claude Code panes are back in their conversations.") };
                     this.layout_notice(if n == 1 { "Resumed an agent" } else { "Resumed agents" }, &body, window, cx);
+                }
+                // Apollo opened after they recovered: a shell might hold someone's
+                // draft, so it asks once instead of typing into it.
+                let n = pass.offered.len();
+                if n > 0 && settings::get().restore_agents {
+                    let what = if n == 1 { "A Claude Code pane".to_owned() } else { format!("{n} Claude Code panes") };
+                    let note = json!({"title": "Resume agents?", "body": format!("{what} can come back in their own conversations. Click to resume."),
+                        "level": "info", "action": {"name": "agent.resume"}});
+                    this.open_overlay(mods::new_overlay_id(), json!({"kind": "toast", "notification": note}), window, cx);
                 }
             });
         }).detach();
@@ -3596,6 +3606,11 @@ impl AppWindow {
                 }
             }
             // ---- agents
+            "agent.resume" => {
+                if let Ok(mut s) = self.resume_state.lock() { s.force = true; }
+                self.resume_at = None;
+                self.tend_resume(true, window, cx);
+            }
             "agent.focus" => {
                 let t = Self::arg(a, "terminal").unwrap_or_default().to_owned();
                 if !self.live.contains_key(&t) {
