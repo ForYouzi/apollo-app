@@ -880,9 +880,10 @@ has 124 programs (agents, editors, runtimes, tools, databases, infra);
   `"claude": { "run": ["my-claude"] }` or add
   `"claude-alt": { "name": "Claude (alt)", "icon": "icons/claude.svg", "run": ["my-claude-alt"] }`
   inside `programs`. While an entry with `run` is the program in front of a
-  pane (by its key, `match` names or `run` program; an interpreter's script
-  counts), the agents list keeps it as `idle` until it reports a status: the
-  core resets a status whenever the terminal's own shell is in front. Use
+  pane (by its own name: key, `match` names or `run` program, not a script an
+  interpreter or shell runs), the agents list keeps it as `idle` until it
+  reports a status: the core resets a status whenever the terminal's own shell
+  is in front. Use
   programs or shell functions, not aliases (the launcher
   does not expand them). On macOS both checks and the menu launcher load login profiles before
   running the agent and leaves an interactive login shell when it ends.
