@@ -237,9 +237,9 @@ pub fn agent_name(app: Option<&str>) -> String {
 }
 
 /// Whether the program in front (`argv` of the foreground process) is an agent
-/// people start: argv[0] resolves (by key first, then `match` names, as the
-/// display does) to an entry with `run`, or names a `run` program. Only the
-/// program itself: an interpreter's or shell's script isn't guessed at, so
+/// people start: argv[0] resolves exactly as the display does (key first, then
+/// `match` names) to an entry with `run`, so the list shows that entry. Only
+/// the program itself: an interpreter's or shell's script isn't guessed at, so
 /// `bash --rcfile /tmp/claude` or `node server.js claude` never count.
 pub fn runs_agent(argv: &[String]) -> bool {
     TABLE.with(|t| runs_agent_in(&t.borrow(), argv))
@@ -250,11 +250,8 @@ fn runs_agent_in(t: &Table, argv: &[String]) -> bool {
     if t.shells.iter().chain(&t.interpreters).any(|l| l.eq_ignore_ascii_case(name)) {
         return false;
     }
-    match find(t, name) {
-        // The entry the display shows wins (a person's own entry without `run` isn't an agent).
-        Some((_, e)) => !e.run.is_empty(),
-        None => t.programs.values().any(|e| e.run.first().is_some_and(|r| base(r).eq_ignore_ascii_case(name))),
-    }
+    // The entry the display shows (a person's own entry without `run` isn't an agent).
+    find(t, name).is_some_and(|(_, e)| !e.run.is_empty())
 }
 
 fn base(s: &str) -> &str {
@@ -437,10 +434,16 @@ mod tests {
         ] {
             assert!(!runs(&t, argv), "{argv:?}");
         }
-        // A person's own agent: by its key or its `run` program.
+        // A person's own agent counts by the names it shows under (key, `match`),
+        // and then the row shows that entry.
         let mut mine = t;
-        mine.programs.insert("claude-alt".into(), Entry { run: vec!["my-claude-alt".into()], ..Entry::default() });
+        mine.programs.insert("claude-alt".into(), Entry { name: Some("Claude (alt)".into()), run: vec!["my-claude-alt".into()], also: vec!["my-claude-alt".into()], ..Entry::default() });
         assert!(runs(&mine, &["/usr/local/bin/my-claude-alt"]));
+        let shown = resolve(&mine, None, &["/usr/local/bin/my-claude-alt".to_string()]);
+        assert_eq!((shown["key"].as_str(), shown["name"].as_str()), (Some("claude-alt"), Some("Claude (alt)")));
+        // Without a `match`, the program isn't shown as that entry, so it isn't inferred either.
+        mine.programs.insert("bare".into(), Entry { run: vec!["my-bare".into()], ..Entry::default() });
+        assert!(!runs(&mine, &["my-bare"]));
         // A person's own entry without `run` wins over a built-in alias, as on display.
         mine.programs.insert("cursor-agent".into(), Entry { name: Some("My tool".into()), ..Entry::default() });
         assert!(!runs(&mine, &["cursor-agent"]));

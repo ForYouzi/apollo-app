@@ -878,10 +878,11 @@ has 124 programs (agents, editors, runtimes, tools, databases, infra);
   from a menu: `knownAgents()` lists the entries with one, and whether this
   machine (or another) has them installed. For example, override
   `"claude": { "run": ["my-claude"] }` or add
-  `"claude-alt": { "name": "Claude (alt)", "icon": "icons/claude.svg", "run": ["my-claude-alt"] }`
+  `"claude-alt": { "name": "Claude (alt)", "icon": "icons/claude.svg", "run": ["my-claude-alt"], "match": ["my-claude-alt"] }`
   inside `programs`. While an entry with `run` is the program in front of a
-  pane (by its own name: key, `match` names or `run` program, not a script an
-  interpreter or shell runs), the agents list keeps it as `idle` until it
+  pane (by its own process name: the entry's key or `match` names, not a
+  script an interpreter or shell runs, so npm installs started through `node`
+  aren't covered), the agents list keeps it as `idle` until it
   reports a status: the core resets a status whenever the terminal's own shell
   is in front. Use
   programs or shell functions, not aliases (the launcher
