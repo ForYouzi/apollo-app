@@ -5,8 +5,8 @@
 
 use std::path::{Path, PathBuf};
 
-/// The icon beside the binary that marks its install folder: the release zip
-/// ships `apollo-app.svg`, `scripts/install-windows.ps1` writes `herdr-app.svg`.
+/// The icon beside the binary that marks its install folder: the release zip and
+/// `scripts/install-windows.ps1` ship `apollo-app.svg`; older source installs have `herdr-app.svg`.
 pub(crate) const ICONS: [&str; 2] = ["apollo-app.svg", "herdr-app.svg"];
 
 /// Where this app is installed: the folder holding the binary and its icon

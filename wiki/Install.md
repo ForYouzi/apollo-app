@@ -25,7 +25,8 @@ xattr -dr com.apple.quarantine /Applications/Apollo.app
 ## Windows
 
 Unzip the `apollo-app` folder anywhere; `apollo-app.exe` opens the app.
-The folder also holds `herdr-app.exe`, the same program: adding the folder to your PATH gives you the `herdr-app` command the docs use.
+Adding the folder to your PATH gives you the `apollo-app` command. On Windows the command is `apollo-app`: type it where the docs say `herdr-app`.
+To upgrade, quit Apollo and replace the whole `apollo-app` folder; unzipping over it would keep files an older release had, such as `herdr-app.exe`.
 
 ### Without a GPU
 
@@ -42,7 +43,7 @@ Set `GPUI_SOFTWARE_RENDER` to `force` to draw that way on a GPU too, or `off` to
 
 Apollo runs your terminals in [herdr-core](https://github.com/herdrdev/herdr-core). It installs the core when it is missing, and can update a core it cannot use.
 
-Apollo shares Herdr's settings home, `~/.config/herdr-app`, and its core, so it uses your Herdr setup as is. The command is still `herdr-app`.
+Apollo shares Herdr's settings home, `~/.config/herdr-app`, and its core, so it uses your Herdr setup as is. The command is still `herdr-app` (`apollo-app` on Windows).
 
 ## Updates
 

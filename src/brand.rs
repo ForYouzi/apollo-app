@@ -131,23 +131,55 @@ mod tests {
         }
     }
 
-    /// The Windows zip ships `apollo-app.exe` (the brand) and `herdr-app.exe`, the same
-    /// binary, so the documented `herdr-app …` commands work with the folder on PATH.
+    /// Windows installs hold one program, `apollo-app.exe`: the zip, and the source
+    /// install that replaces its folder whole (so an old `herdr-app.exe` goes with it).
     #[test]
-    fn windows_zip_ships_both_command_names() {
+    fn windows_installs_ship_only_apollo_app() {
+        // The Windows zip and its release check, word for word: any edit to either is reviewed here.
         let package = include_str!("../scripts/package").replace("\r\n", "\n");
-        let start = package.find("if [[ $os == windows ]]; then\n").expect("scripts/package has no Windows branch");
+        // From the line that drops an older zip: 7z would add to it, keeping files it had.
+        let start = package.find("rm -f \"$out\"\nif [[ $os == windows ]]; then\n").expect("scripts/package has no Windows branch after rm -f \"$out\"");
         let windows = &package[start..start + package[start..].find("\nelse\n").unwrap()];
-        for want in ["cp \"$bin/herdr-app.exe\" \"$dir/apollo-app.exe\"", "cp \"$bin/herdr-app.exe\" \"$dir/herdr-app.exe\"", "cmp \"$dir/apollo-app.exe\" \"$dir/herdr-app.exe\""] {
-            assert!(windows.contains(want), "scripts/package's Windows branch lacks {want}:\n{windows}");
-        }
+        assert_eq!(windows, r#"rm -f "$out"
+if [[ $os == windows ]]; then
+  dir="$work/apollo-app"
+  mkdir -p "$dir"
+  cp "$bin/herdr-app.exe" "$dir/apollo-app.exe"
+  cp assets/icons/apollo.svg "$dir/apollo-app.svg"
+  cp LICENSE THIRD-PARTY-NOTICES "$dir/"
+  cmp "$dir/THIRD-PARTY-NOTICES" THIRD-PARTY-NOTICES
+  (cd "$work" && 7z a -tzip "$out" apollo-app >/dev/null)"#, "scripts/package's Windows branch: only apollo-app.exe, its icon, LICENSE and notices");
+        // The release checks the zip holds exactly these files and runs the version it was tagged with.
         let release = include_str!("../.github/workflows/release.yml").replace("\r\n", "\n");
         let check = &release[release.find("- name: Check the Windows zip").unwrap()..];
         let check = &check[..check.find("- uses:").unwrap()];
-        for exe in ["apollo-app.exe", "herdr-app.exe"] {
-            let want = format!("HERDR_APP_HOME=\"$x/home\" \"$x/apollo-app/{exe}\" --version | grep -q \"^herdr-app \"");
-            assert!(check.contains(&want), "release.yml doesn't run {exe}:\n{check}");
+        assert_eq!(check, r#"- name: Check the Windows zip (no window)
+        if: runner.os == 'Windows'
+        run: |
+          x=$(mktemp -d); 7z x -o"$x" dist/apollo-app-*-windows-x86_64.zip >/dev/null
+          # Exactly these files: on Windows the command is apollo-app, with no second copy.
+          diff <(printf '%s\n' apollo-app/apollo-app.exe apollo-app/apollo-app.svg apollo-app/LICENSE apollo-app/THIRD-PARTY-NOTICES | sort) <(cd "$x" && find . -type f | sed 's|^\./||' | sort)
+          HERDR_APP_HOME="$x/home" "$x/apollo-app/apollo-app.exe" --version > "$x/version"
+          cmp "$x/version" <(printf 'herdr-app %s\n' "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)")
+      "#, "release.yml's Windows zip check");
+        // Whole lines, so a commented-out line doesn't count.
+        let has_line = |text: &str, line: &str| text.lines().any(|l| l.trim() == line);
+        let build = &release[release.find("\n  build:\n").unwrap()..release.find("- name: Check the Windows zip").unwrap()];
+        assert!(has_line(build, "defaults: { run: { shell: bash } }"), "the Windows zip check is bash: the build job must keep its bash default");
+        let install = include_str!("../scripts/install-windows.ps1").replace("\r\n", "\n");
+        for want in [
+            "Copy-Item -LiteralPath $Binary -Destination \"$stage\\apollo-app.exe\"",
+            "Copy-Item -LiteralPath $Icon -Destination \"$stage\\apollo-app.svg\"",
+            "$link.TargetPath = Join-Path $dir \"apollo-app.exe\"",
+            "Write-Host \"Installed Apollo (apollo-app). Quit and reopen Apollo to use the new build.\"",
+        ] {
+            assert!(has_line(&install, want), "scripts/install-windows.ps1 lacks the line {want}");
         }
+        assert!(!install.contains("\"$stage\\herdr-app.exe\"") && !install.contains("Join-Path $dir \"herdr-app.exe\""), "scripts/install-windows.ps1 must install apollo-app.exe only");
+        // Upgrades keep the folder already on PATH, and the installer test replaces that same folder.
+        let install_test = include_str!("../scripts/test-install-windows.ps1").replace("\r\n", "\n");
+        assert!(has_line(&install, "$dir = Join-Path $env:LOCALAPPDATA \"Programs\\herdr-app\""), "scripts/install-windows.ps1 must keep Programs\\herdr-app");
+        assert!(has_line(&install_test, "$destination = Join-Path $tmp \"Programs\\herdr-app\""), "scripts/test-install-windows.ps1 must upgrade the installer's folder");
         // The icon beside the exe marks the install folder (src/install_folder.rs): every
         // Windows install must ship one the app recognises.
         let icon = |line: &str| line.rsplit(['/', '\\']).next().map(|n| n.trim_end_matches('"').to_owned());
@@ -161,7 +193,26 @@ mod tests {
             }
         }
         let readme = include_str!("../wiki/Install.md").replace("\r\n", "\n");
-        assert!(readme.contains("`apollo-app.exe` opens the app") && readme.contains("gives you the `herdr-app` command"), "wiki/Install.md's Windows install text");
+        for want in ["`apollo-app.exe` opens the app", "gives you the `apollo-app` command", "replace the whole `apollo-app` folder", "The command is still `herdr-app` (`apollo-app` on Windows)."] {
+            assert!(readme.contains(want), "wiki/Install.md's Windows install text lacks {want}");
+        }
+    }
+
+    /// `herdr-app` is `apollo-app` on Windows: each text agents start from says so once.
+    #[test]
+    fn agent_texts_name_the_windows_command_once() {
+        let note = "On Windows the command is `apollo-app`";
+        for (file, text) in [
+            ("src/SKILL.md", include_str!("SKILL.md")),
+            ("defaults/AGENTS.md", include_str!("../defaults/AGENTS.md")),
+            ("src/main.rs HELP", crate::HELP),
+            ("wiki/For-Agents.md", include_str!("../wiki/For-Agents.md")),
+            ("wiki/Install.md", include_str!("../wiki/Install.md")),
+        ] {
+            assert_eq!(text.matches(note).count(), 1, "{file} must say once: {note}");
+        }
+        let rules = include_str!("../AGENTS.md").replace("\r\n", "\n");
+        assert!(rules.contains("command there is `apollo-app`"), "AGENTS.md must keep the Windows exception to the herdr-app command");
     }
 
     /// Only a pushed version tag runs a release (nothing by hand, like SonicTerm), and

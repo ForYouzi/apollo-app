@@ -5,6 +5,7 @@ herdr-app --skill
 ```
 
 This prints the agent guide for driving the window. The herdr-core skill points agents here.
+On Windows the command is `apollo-app`: run `apollo-app --skill`, and read `herdr-app` in the guide as `apollo-app`.
 Use herdr-core (`hc`) for running and coordinating programs; use the app to change what you see.
 
 ```sh
