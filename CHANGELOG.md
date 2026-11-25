@@ -1,5 +1,12 @@
 # Apollo changelog
 
+## [0.0.11] - 2026-11-24
+
+Takes Herdr's later changes up to a2e8e3f: agents from the + menu open in unnamed tabs, so the tab bar follows the running agent and shows the shell again after it exits. (#45)
+
+### New
+- **On Windows the command is `apollo-app`.** The Windows zip now holds only `apollo-app.exe`, without the duplicate `herdr-app.exe`. With the folder on your PATH, type `apollo-app` where the docs say `herdr-app`; the guides agents read and the welcome page say so. To upgrade, replace the whole `apollo-app` folder instead of unzipping over it, so the old `herdr-app.exe` doesn't stay behind. (#46)
+
 ## [0.0.10] - 2026-11-24
 
 Takes Herdr 0.1.18 (entries below for 0.1.17 and 0.1.18): Shift+click extends a terminal selection, panes you're not in can fade, a separate bold font weight, `agent.select`, your own notes in `AGENTS.local.md`, more for mod authors, and Files and Changes using far less CPU on big repositories. (#42)
