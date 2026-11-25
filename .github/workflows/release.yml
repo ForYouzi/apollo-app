@@ -75,8 +75,10 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           x=$(mktemp -d); 7z x -o"$x" dist/apollo-app-*-windows-x86_64.zip >/dev/null
-          HERDR_APP_HOME="$x/home" "$x/apollo-app/apollo-app.exe" --version | grep -q "^herdr-app "
-          HERDR_APP_HOME="$x/home" "$x/apollo-app/herdr-app.exe" --version | grep -q "^herdr-app "
+          # Exactly these files: on Windows the command is apollo-app, with no second copy.
+          diff <(printf '%s\n' apollo-app/apollo-app.exe apollo-app/apollo-app.svg apollo-app/LICENSE apollo-app/THIRD-PARTY-NOTICES | sort) <(cd "$x" && find . -type f | sed 's|^\./||' | sort)
+          HERDR_APP_HOME="$x/home" "$x/apollo-app/apollo-app.exe" --version > "$x/version"
+          cmp "$x/version" <(printf 'herdr-app %s\n' "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)")
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with: { name: "${{ matrix.platform }}", path: dist/apollo-app-*.zip, if-no-files-found: error }
   # ci.yml runs on pushes to main (and PRs), never on tags: tag a main commit

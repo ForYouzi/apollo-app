@@ -27,6 +27,7 @@ from the same parts you have.
   (`hc --help`). Apollo is one client of it.
 
 `herdr-app` controls this app; `hc` controls herdr-core.
+On Windows the command is `apollo-app`: read `herdr-app` in this guide as `apollo-app`.
 
 ## What you can and can't do
 

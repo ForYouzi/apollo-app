@@ -2,13 +2,14 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, Scrollbar } from "gpui-base";
-import { spaces, run, theme, props, closeOverlay, setShared, shared, hc, appHome, readTextFile, writeTextFile, settings, layout, keys } from "herdr";
+import { spaces, run, theme, props, closeOverlay, setShared, shared, hc, appHome, readTextFile, writeTextFile, settings, layout, keys, window } from "herdr";
 
 const I = (name) => `frame/welcome/${name}.svg`;
 const W = (name) => `mods/workspace-chrome/${name}.svg`;
 const PAGES = 4;
 const ASK = "Read ~/.config/herdr-app/AGENTS.md, then tell me what you can change in Apollo.";
-const MIGRATE = "Read `herdr-app --skill`, then migrate my keybinds and settings from ~/.config/herdr/config.toml";
+// On Windows the command is apollo-app: its zip ships only apollo-app.exe.
+const migrate = () => `Read \`${window()?.platform === "windows" ? "apollo-app" : "herdr-app"} --skill\`, then migrate my keybinds and settings from ~/.config/herdr/config.toml`;
 const APPEARANCES = [
   [null, "System"],
   ["light", "Light"],
@@ -276,7 +277,7 @@ export default class Welcome extends View {
       .child(this.para(t, "This is a new app on a new core. Your herdr workspaces stay where they are; nothing moves over."))
       .child(this.para(t, "Same idea as before: spaces, tabs and terminals."))
       .child(this.para(t, "Want your keybinds and settings carried over? Give your agent this line:"))
-      .child(this.copyLine(t, MIGRATE, "w-migrate-copy"));
+      .child(this.copyLine(t, migrate(), "w-migrate-copy"));
   }
 
   // Pages ---------------------------------------------------------------

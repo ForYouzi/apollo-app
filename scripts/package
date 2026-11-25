@@ -7,8 +7,8 @@
 # macOS: Apollo.app, signed with APPLE_CERTIFICATE_P12 when available,
 # otherwise ad hoc (scripts/mac-sign), and notarized with APPLE_API_KEY when
 # available (scripts/mac-notarize).
-# Windows (Git Bash): an apollo-app folder holding apollo-app.exe, herdr-app.exe
-# (the same binary, so `herdr-app …` works with the folder on PATH) and the icon.
+# Windows (Git Bash): an apollo-app folder holding apollo-app.exe, its icon, the
+# license and notices. On Windows the command is apollo-app; there is no herdr-app.exe.
 # No core inside: the app installs herdr-core's own release
 # (distribution/core-version is the oldest core this app works with).
 # The app never updates itself; new versions come from the Releases page.
@@ -70,8 +70,6 @@ if [[ $os == windows ]]; then
   dir="$work/apollo-app"
   mkdir -p "$dir"
   cp "$bin/herdr-app.exe" "$dir/apollo-app.exe"
-  cp "$bin/herdr-app.exe" "$dir/herdr-app.exe"
-  cmp "$dir/apollo-app.exe" "$dir/herdr-app.exe"
   cp assets/icons/apollo.svg "$dir/apollo-app.svg"
   cp LICENSE THIRD-PARTY-NOTICES "$dir/"
   cmp "$dir/THIRD-PARTY-NOTICES" THIRD-PARTY-NOTICES

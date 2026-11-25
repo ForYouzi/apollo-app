@@ -7,8 +7,8 @@ function Install-HerdrAppFiles($Binary, $Icon, $Destination) {
     $installed = $false
     try {
         New-Item -ItemType Directory -Path $stage -Force | Out-Null
-        Copy-Item -LiteralPath $Binary -Destination "$stage\herdr-app.exe"
-        Copy-Item -LiteralPath $Icon -Destination "$stage\herdr-app.svg"
+        Copy-Item -LiteralPath $Binary -Destination "$stage\apollo-app.exe"
+        Copy-Item -LiteralPath $Icon -Destination "$stage\apollo-app.svg"
         # Renaming the folder leaves an already running app alive.
         if (Test-Path -LiteralPath $Destination) {
             Rename-Item -LiteralPath $Destination -NewName (Split-Path $backup -Leaf)
@@ -53,10 +53,11 @@ try {
     Pop-Location
 }
 
-# The Start menu shortcut shows the brand name (src/brand.rs NAME); files and PATH keep herdr-app.
+# The Start menu shortcut shows the brand name (src/brand.rs NAME). The folder keeps its
+# herdr-app name, so an existing PATH entry still works; the command is apollo-app.
 $menu = Join-Path ([Environment]::GetFolderPath("Programs")) "Apollo.lnk"
 $link = (New-Object -ComObject WScript.Shell).CreateShortcut($menu)
-$link.TargetPath = Join-Path $dir "herdr-app.exe"
+$link.TargetPath = Join-Path $dir "apollo-app.exe"
 $link.WorkingDirectory = $env:USERPROFILE
 $link.Description = "Terminals and coding agents that keep running"
 $link.Save()
@@ -76,4 +77,4 @@ try {
     $key.Close()
 }
 if (($env:Path -split ";") -notcontains $dir) { $env:Path += ";$dir" }
-Write-Host "Installed Apollo (herdr-app). Quit and reopen Apollo to use the new build."
+Write-Host "Installed Apollo (apollo-app). Quit and reopen Apollo to use the new build."

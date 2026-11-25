@@ -20,7 +20,8 @@ The brand (name, bundle id, icon, executable) lives in `src/brand.rs`;
 Composer), compiled into the committed `assets/icons/Assets.car` by
 `scripts/mac-icon`; its Dark look keeps the yellow. Rerun the script after
 editing the icon. Internal herdr names stay on purpose: the
-`herdr-app` command, the settings home `~/.config/herdr-app`, herdr-core,
+`herdr-app` command (on Windows the zip ships only `apollo-app.exe`, so the
+command there is `apollo-app`), the settings home `~/.config/herdr-app`, herdr-core,
 and the `HERDR_*` environment variables, so Apollo shares a Herdr setup.
 
 Apollo never updates itself (`src/update.rs`); new versions are on the
